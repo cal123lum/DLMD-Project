@@ -14,7 +14,7 @@ DATA_RAW       = ROOT / "data" / "raw"
 DATA_PROCESSED = ROOT / "data" / "processed"
 MODELS         = ROOT / "models"
 MODELS_BASE    = MODELS / "baselines"
-MODELS_GAN     = MODELS / "gan"
+MODELS_GAN     = MODELS / "gan" / "generator.pth"
 
 BODMAS_NPZ         = DATA_RAW / "bodmas.npz"
 BASELINE_RF_CV_JOB = MODELS_BASE / "baseline_rf_cv_full.joblib"
