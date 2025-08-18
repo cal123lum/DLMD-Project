@@ -7,7 +7,7 @@ import torch
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
-from src.paths import BODMAS_NPZ, DATA_PROCESSED
+from src.paths import BODMAS_NPZ, DATA_PROCESSED, MODELS_GAN
 
 # ─── allow import of augmentation/model.py & config_aug ──────────────────────
 SCRIPT_DIR = os.path.dirname(__file__)
@@ -22,7 +22,7 @@ from src.augmentation import config_aug as C
 
 # ─── file paths ──────────────────────────────────────────────────────────────
 NPZ_PATH    = str(BODMAS_NPZ)
-GEN_PATH    = "models/augmentation/generator.pth"
+GEN_PATH    = str(MODELS_GAN)
 OUTPUT_CSV  = str(DATA_PROCESSED / "scarcity_npz_fixed_results_zoom2.csv")
 
 # ─── experiment settings ─────────────────────────────────────────────────────
