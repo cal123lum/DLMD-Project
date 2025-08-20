@@ -74,19 +74,65 @@ def sample_scarce_indices(y, frac, min_pos=50, seed=42):
 
 def add_gan_synth(X_real, y_real, X_like_mal, n_synth, generator_path):
     """
-    Adds n_synth synthetic malware rows. Assumes your augmentation utilities expose:
-      - load_generator(path) -> generator object
-      - sample_synthetic(G, n, like=<np.ndarray of malware rows>) -> np.ndarray
+    Adds n_synth synthetic malware rows.
+
+    First tries to import: load_generator + sample_synthetic from src.augmentation.model.
+    If unavailable, falls back to loading Generator() + sampling with torch.
+    If a scaler artifact exists next to the generator (same stem + '.scaler.npz'),
+    it will inverse-transform the generated samples back to the raw feature space.
     """
-    from src.augmentation.model import load_generator, sample_synthetic  # adjust names if needed
     if n_synth <= 0:
         return X_real, y_real
-    G = load_generator(generator_path)
-    X_syn = sample_synthetic(G, n=n_synth, like=X_like_mal)
+
+    # Preferred path (if your helpers exist)
+    try:
+        from src.augmentation.model import load_generator, sample_synthetic
+        G = load_generator(generator_path)
+        X_syn = sample_synthetic(G, n=n_synth, like=X_like_mal)
+    except Exception:
+        import torch
+        from pathlib import Path
+        from src.augmentation.model import Generator
+        try:
+            from src.augmentation import config_aug as C
+            zdim = int(getattr(C, "LATENT_DIM", 128))
+        except Exception:
+            zdim = 128
+
+        # Load generator weights
+        G = Generator().to("cpu")
+        sd = torch.load(generator_path, map_location="cpu")
+        G.load_state_dict(sd, strict=False)
+        G.eval()
+
+        # Optional inverse-transform using saved scaler
+        scaler_mean = scaler_scale = None
+        scaler_path = Path(generator_path).with_suffix(".scaler.npz")
+        if scaler_path.exists():
+            d = np.load(scaler_path)
+            scaler_mean = d.get("mean_")
+            scaler_scale = d.get("scale_")
+
+        # Sample in batches
+        out = []
+        bs = 2048
+        n_left = int(n_synth)
+        with torch.no_grad():
+            while n_left > 0:
+                k = min(bs, n_left)
+                z = torch.randn(k, zdim)
+                fake = G(z).cpu().numpy().astype(np.float32)
+                if scaler_mean is not None and scaler_scale is not None:
+                    fake = fake * scaler_scale + scaler_mean
+                out.append(fake)
+                n_left -= k
+        X_syn = np.vstack(out)
+
     y_syn = np.ones(len(X_syn), dtype=y_real.dtype)
     X_aug = np.vstack([X_real, X_syn])
     y_aug = np.concatenate([y_real, y_syn])
     return X_aug, y_aug
+
 
 
 def main():
