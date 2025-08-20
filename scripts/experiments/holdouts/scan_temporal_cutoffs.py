@@ -11,11 +11,11 @@ from src.paths import ROOT
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--start", type=str, default="2016-01-01")
-    ap.add_argument("--end",   type=str, default="2020-01-01")
+    ap.add_argument("--end",   type=str, default="2020-09-30")
     ap.add_argument("--freq",  type=str, default="MS", help="pandas freq (e.g., MS=monthly, QS=quarterly)")
     ap.add_argument("--min-train-pos", type=int, default=500, help="minimum malware (y=1) required in train")
     ap.add_argument("--min-train-pos-rate", type=float, default=0.05, help="min positive rate in train")
-    ap.add_argument("--out", type=str, default=str(ROOT / "data" / "processed" / "metrics" / "temporal_scan.csv"))
+    ap.add_argument("--out", type=str, default=str(ROOT / "data" / "processed" / "metrics" / "scans" / "temporal_scan.csv"))
     args = ap.parse_args()
 
     meta = load_metadata()

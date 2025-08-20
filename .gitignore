@@ -11,12 +11,13 @@ venv/
 .env/
 
 # Data
-data/raw/
-data/processed/
-!data/processed/.gitkeep
+data/raw/*.npz
+data/processed/**
+data/holdouts/*.json
 
 # Models
-models/
+models/**
+logs/**
 !models/.gitkeep
 
 # Checkpoint / temp files
