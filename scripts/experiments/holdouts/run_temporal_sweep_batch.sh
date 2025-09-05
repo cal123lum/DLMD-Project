@@ -13,29 +13,32 @@ fi
 
 export PYTHONPATH="$ROOT:${PYTHONPATH:-}"
 
-# --- knobs you can tweak (or override via env when calling) ---
+# --- knobs (can be overridden via env) ---
 CONST="${CONST:-20000}"   # total train size for +GAN
-DO_CONTEXT="${DO_CONTEXT:-0}"  # 1 to also run context-tier sweep
-FRACS_SCARCITY="${FRACS_SCARCITY:-0.0005,0.001,0.002,0.003,0.005,0.0075,0.01,0.015,0.02}"
+DO_CONTEXT="${DO_CONTEXT:-0}"
+FRACS_SCARCITY="${FRACS_SCARCITY:-0.0005,0.001,0.0015,0.002,0.0025,0.003,0.0035,0.004,0.0045,0.005,0.0055,0.006,0.0065,0.007,0.0075,0.008,0.0085,0.009,0.0095,0.01}"
 FRACS_CONTEXT="${FRACS_CONTEXT:-0.05,0.10,0.25,0.50,1.0}"
 SEED="${SEED:-42}"
 
-# --- knobs for robustness
-SEEDS_LIST="${SEEDS_LIST:-42,1337,2025}"      # multi-seed CV
-WIN_DAYS="${WIN_DAYS:-60}"                    # fixed test window length
-WIN_STEP="${WIN_STEP:-30}"                    # stride between windows
-N_WINS="${N_WINS:-6}"                         # how many windows from test start  (I bumped default to 6; set what you want)
-ONLY_IDX="${ONLY_IDX:-}"                      # 0..N-1 to run one cutoff for smoke tests
-RUN_SUFFIX="${RUN_SUFFIX:-}"                  # append to results folders to avoid overwrite
+# --- robustness ---
+SEEDS_LIST="${SEEDS_LIST:-42,1337,2025}"
+WIN_DAYS="${WIN_DAYS:-60}"
+WIN_STEP="${WIN_STEP:-30}"
+N_WINS="${N_WINS:-6}"
+ONLY_IDX="${ONLY_IDX:-}"         # 0..N-1 to run one cutoff for smoke tests
+RUN_SUFFIX="${RUN_SUFFIX:-}"     # append to folder names
 FORCE_TRAIN_GAN="${FORCE_TRAIN_GAN:-1}"
 
-# If you want the same MINPOS everywhere, export MINPOS_ALL=5 when calling.
+# If you want same MINPOS everywhere, export MINPOS_ALL=5
 MINPOS_ALL="${MINPOS_ALL:-}"
 
-CUTS=(    "2019-09-01"  "2019-10-01"  "2019-12-01"  "2020-03-01"  "2020-06-01"  "2020-09-01" )
-PREFIXES=("cut2019_09"  "cut2019_10"  "cut2019_12"  "cut2020_03"  "cut2020_06"  "cut2020_09" )
+# >>> Write EVERYTHING to *_rerun trees <<<
+OUT_BASE="data/processed/metrics/temporal_rerun"
+GAN_BASE="models/gan/temporal_rerun"
 
-# helper: decide MINPOS per prefix (unless MINPOS_ALL is set)
+CUTS=(  "2019-10-01"  "2019-12-01"  "2020-03-01"  "2020-06-01"  "2020-09-01" )
+PREFIXES=( "cut2019_10"  "cut2019_12"  "cut2020_03"  "cut2020_06"  "cut2020_09" )
+
 minpos_for_prefix () {
   local p="$1"
   if [[ -n "$MINPOS_ALL" ]]; then
@@ -48,71 +51,89 @@ minpos_for_prefix () {
     cut2020_03) echo 25 ;;
     cut2020_06) echo 25 ;;
     cut2020_09) echo 25 ;;
-    *)          echo 10 ;; # default
+    *)          echo 10 ;;
   esac
 }
 
 run_one () {
-    local prefix_base="$1"
-    local cutoff="$2"
-    local prefix="${prefix_base}${RUN_SUFFIX}"
-    local minpos
-    minpos="$(minpos_for_prefix "$prefix_base")"
+  local prefix_base="$1"
+  local cutoff="$2"
+  local prefix="${prefix_base}${RUN_SUFFIX}"
+  local minpos; minpos="$(minpos_for_prefix "$prefix_base")"
 
-    # Artifacts
-    local outdir="data/processed/metrics/temporal/${prefix}"
-    local gendir="models/gan/temporal/${prefix}"   # <— train NEW GAN per run
-    mkdir -p "$outdir" "$gendir" logs
+  # Per-cutoff folders (RERUN trees)
+  local outdir="${OUT_BASE}/${prefix}"
+  local gendir="${GAN_BASE}/${prefix}"
+  mkdir -p "$outdir" "$gendir" logs
 
-    echo "=== [${prefix}] cutoff=${cutoff} MINPOS=${minpos} CONST=${CONST} ==="
+  echo "=== [${prefix}] cutoff=${cutoff} MINPOS=${minpos} CONST=${CONST} ==="
 
-    # Always refresh split
-    make temporal-split PREFIX="$prefix" TEMP_CUTOFF="$cutoff" | tee "logs/${prefix}_split.log"
+  # Always refresh split for this cutoff
+  venv/bin/python -m scripts.experiments.holdouts.make_holdouts --temporal-cutoff "${cutoff}"
+  venv/bin/python -m scripts.experiments.holdouts.verify_holdouts
 
-    # Train GAN (force if requested)
-    if [[ "$FORCE_TRAIN_GAN" == "1" || ! -f "${gendir}/generator.pth" ]]; then
-        make train-gan PREFIX="$prefix" TEMP_CUTOFF="$cutoff" | tee "logs/${prefix}_train_gan.log"
-    else
-        echo "[skip] generator exists at ${gendir}/generator.pth"
-    fi
+  # Train GAN if forced OR missing for this cutoff
+  if [[ "$FORCE_TRAIN_GAN" == "1" || ! -f "${gendir}/generator.pth" ]]; then
+    # Train generator
+    venv/bin/python scripts/gan/train_gan.py \
+      --indices-json data/holdouts/temporal_indices.json \
+      --malware-only \
+      --out "${gendir}/generator.pth" | tee "logs/${prefix}_train_gan.log"
+  else
+    echo "[skip] generator exists at ${gendir}/generator.pth"
+  fi
 
-# 3) Scarcity sweep → raw.csv
-  python -m scripts.experiments.holdouts.sweep_holdouts_scarcity \
+  # Ensure scaler exists for this cutoff (fits on same train malware subset)
+  if [[ ! -f "${gendir}/scaler.npz" ]]; then
+    venv/bin/python -m scripts.utils.make_gan_scaler \
+      --indices-json data/holdouts/temporal_indices.json \
+      --out "${gendir}/scaler.npz"
+  fi
+
+  # 3) Scarcity sweep → per-cutoff raw.csv
+  venv/bin/python -m scripts.experiments.holdouts.sweep_holdouts_scarcity \
     --use-temporal \
     --fractions "$FRACS_SCARCITY" \
     --const-train-size "$CONST" \
     --gan-generator "${gendir}/generator.pth" \
+    --gan-scaler    "${gendir}/scaler.npz" \
     --tag-prefix "$prefix" \
     --min-train-pos "$minpos" \
     --seeds "$SEEDS_LIST" \
-    --val-threshold f1 \
+    --val-threshold balacc \
     --compare gan,oversample,smote \
     --test-window-days "$WIN_DAYS" \
     --test-window-step-days "$WIN_STEP" \
     --n-test-windows "$N_WINS" \
+    --metrics-subdir temporal_rerun \
+    --rf-class-weight none \
+    --rf-max-depth 20 \
+    --rf-n-est 400 \
+    --balance-after-augment \
+    --gan-like full \
+    --gan-synth-per-real 2 \
+    --gan-quality nn_boundary \
+    --gan-qmult 5 \
     --out-csv "${outdir}/raw.csv" \
     | tee "logs/${prefix}_sweep_scarcity.log"
 
-  # 3b) Pair + aggregate
-  python -m scripts.utils.pair_results \
+  # 3b) Pair + aggregate (writes paired.csv and paired_cv.csv)
+  venv/bin/python -m scripts.utils.pair_results \
     --prefix "$prefix" \
-    --metrics-root "data/processed/metrics/temporal" \
-    --raw       "data/processed/metrics/temporal/${prefix}/raw.csv" \
-    --paired-out    "data/processed/metrics/temporal/${prefix}/paired.csv" \
-    --paired-cv-out "data/processed/metrics/temporal/${prefix}/paired_cv.csv" \
+    --metrics-root "${OUT_BASE}" \
+    --raw          "${outdir}/raw.csv" \
+    --paired-out        "${outdir}/paired.csv" \
+    --paired-cv-out     "${outdir}/paired_cv.csv" \
     | tee "logs/${prefix}_pair.log"
 
   echo ">>> Done: ${outdir}/paired.csv and paired_cv.csv"
 
-
-  # 4) Optional: context-tier sweep (+ pair)
+  # 4) Optional context-tier sweep (unchanged)
   if [[ "$DO_CONTEXT" == "1" ]]; then
     make sweep PREFIX="$prefix" FRACTIONS="$FRACS_CONTEXT" MINPOS="$minpos" CONST="$CONST" \
       | tee "logs/${prefix}_sweep_context.log"
     make pair  PREFIX="$prefix" | tee -a "logs/${prefix}_pair_context.log"
   fi
-
-  echo ">>> Done: ${outdir}/paired.csv"
 }
 
 # -------- main loop --------
