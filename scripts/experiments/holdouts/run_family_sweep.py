@@ -10,7 +10,7 @@ GAN_DIR    = ROOT / "models" / "gan" / "family"
 MET_FAM    = ROOT / "data" / "processed" / "metrics" / "family"
 
 # scarcity levels & robustness seeds
-FRACS = [0.0005, 0.001, 0.002, 0.005, 0.01]
+FRACS = [0.0005,0.001, 0.0015, 0.002, 0.0025, 0.003, 0.0035, 0.004, 0.0045, 0.005, 0.0055, 0.006, 0.0065, 0.007, 0.0075, 0.008, 0.0085, 0.009, 0.0095, 0.01]
 SEEDS = [42, 1337, 2025]
 
 # train-time constraints
