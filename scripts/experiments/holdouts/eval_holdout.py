@@ -153,7 +153,9 @@ def add_gan_synth(
     seed=None, scaler_npz=None,
     quality="nn", qmult=3.0,
     X_neg_for_quality=None,
-    boundary_low=0.20, boundary_high=0.60, boundary_k=5
+    boundary_low=0.20, boundary_high=0.60, boundary_k=5,
+    evo_refine=False, evo_parent_source="both",
+    evo_mutate_sigma=0.10, evo_cx_alpha=2.0, evo_qlow=0.01, evo_qhigh=0.99,
 ):
     """
     Generate n_synth malware samples with G and append to (X_real, y_real).
@@ -198,6 +200,16 @@ def add_gan_synth(
         mean, scale = sc["mean_"].astype(np.float32), sc["scale_"].astype(np.float32)
         X_syn = X_syn * scale + mean
 
+    if evo_refine:
+        X_syn = _evo_refine_pool(
+            X_syn, X_like_pos,
+            seed=seed,
+            parent_source=evo_parent_source,
+            mutate_sigma=evo_mutate_sigma,
+            cx_alpha=evo_cx_alpha,
+            qlow=evo_qlow,
+            qhigh=evo_qhigh,
+        )
     # quality filtering
     if quality == "none" or len(X_like_pos) == 0:
         keep_idx = np.arange(min(n_gen, n_synth))
@@ -240,6 +252,120 @@ def add_gan_synth(
     X_keep = X_syn[keep_idx]
     y_keep = np.ones(len(X_keep), dtype=y_real.dtype)
     return np.vstack([X_real, X_keep]), np.concatenate([y_real, y_keep])
+
+def add_evo_synth(
+    X_real, y_real, X_like_pos, n_synth, *,
+    seed=None, qmult=3.0, quality="nn_boundary",
+    X_neg_for_quality=None,
+    qlow=0.01, qhigh=0.99,
+    mutate_sigma=0.10, cx_alpha=2.0,
+    boundary_low=0.20, boundary_high=0.60, boundary_k=5,
+):
+    """
+    Lightweight 'evolutionary' synthesizer over malware feature space:
+      child = convex(p1, p2) + Gaussian_mutation; clamp to robust per-feature range.
+      Then the same NN/NN-Boundary quality gates as GAN.
+    """
+    if n_synth <= 0 or X_like_pos is None or len(X_like_pos) == 0:
+        return X_real, y_real
+
+    rng = np.random.default_rng(seed)
+
+    # robust per-feature ranges & scale (IQR fallback to std)
+    q_lo  = np.quantile(X_like_pos, qlow,  axis=0)
+    q_hi  = np.quantile(X_like_pos, qhigh, axis=0)
+    iqr   = np.quantile(X_like_pos, 0.75,  axis=0) - np.quantile(X_like_pos, 0.25, axis=0)
+    std   = X_like_pos.std(axis=0)
+    scale = np.where(iqr > 1e-6, iqr, np.where(std > 1e-6, std, 1.0)).astype(np.float32)
+
+    # oversample then filter
+    n_gen = int(max(n_synth, int(np.ceil(float(qmult) * n_synth))))
+    idx1 = rng.integers(0, len(X_like_pos), size=n_gen)
+    idx2 = rng.integers(0, len(X_like_pos), size=n_gen)
+    p1, p2 = X_like_pos[idx1], X_like_pos[idx2]
+
+    # convex mix: Beta(alpha,alpha) → peaked near 0.5 when alpha>1
+    if cx_alpha > 0:
+        a = rng.beta(cx_alpha, cx_alpha, size=n_gen).astype(np.float32)
+    else:
+        a = rng.random(n_gen, dtype=np.float32)
+    child = (a[:,None] * p1 + (1.0 - a[:,None]) * p2).astype(np.float32)
+
+    # Gaussian mutation scaled by robust feature spread
+    child += rng.normal(0.0, mutate_sigma, size=child.shape).astype(np.float32) * scale
+
+    # clamp to robust range
+    child = np.clip(child, q_lo, q_hi, out=child)
+
+    # quality filtering (reuse same logic as GAN)
+    if quality == "none":
+        keep_idx = np.arange(min(n_gen, n_synth))
+    else:
+        dpos = _nn_min_dist(child, X_like_pos, k=1)
+        if quality == "nn" or X_neg_for_quality is None or len(X_neg_for_quality) == 0:
+            order = np.argsort(dpos)
+            keep_idx = order[:n_synth]
+        else:  # nn_boundary
+            dneg = _nn_min_dist(child, X_neg_for_quality, k=max(1, int(boundary_k)))
+            low = np.quantile(dneg, float(boundary_low))
+            high = np.quantile(dneg, float(boundary_high))
+            pos_ok = dpos <= np.quantile(dpos, 0.50)
+            neg_ok = (dneg >= low) & (dneg <= high)
+            mask = pos_ok & neg_ok
+            idx = np.where(mask)[0]
+            if len(idx) >= n_synth:
+                keep_idx = rng.choice(idx, size=n_synth, replace=False)
+            else:
+                remaining = np.setdiff1d(np.arange(n_gen), idx, assume_unique=False)
+                fill_order = remaining[np.argsort(dpos[remaining])]
+                keep_idx = np.concatenate([idx, fill_order[:max(0, n_synth - len(idx))]])
+
+    X_keep = child[keep_idx]
+    y_keep = np.ones(len(X_keep), dtype=y_real.dtype)
+    return np.vstack([X_real, X_keep]), np.concatenate([y_real, y_keep])
+
+def _evo_refine_pool(candidates, X_like_pos, *, seed, parent_source="both",
+                     mutate_sigma=0.10, cx_alpha=2.0, qlow=0.01, qhigh=0.99):
+    """
+    One evolutionary step over 'candidates' using parents from:
+      - 'gan'  -> candidates only
+      - 'real' -> X_like_pos only
+      - 'both' -> concat([candidates, X_like_pos])
+    child = convex(parent1, parent2) + Gaussian_mutation; clamp to robust range.
+    """
+    if len(candidates) == 0:
+        return candidates
+    rng = np.random.default_rng(seed)
+
+    if parent_source == "gan":
+        pool = candidates
+    elif parent_source == "real":
+        pool = X_like_pos if len(X_like_pos) else candidates
+    else:  # both
+        pool = candidates if len(X_like_pos) == 0 else np.vstack([candidates, X_like_pos])
+
+    base = X_like_pos if len(X_like_pos) else pool
+    q_lo  = np.quantile(base, qlow,  axis=0)
+    q_hi  = np.quantile(base, qhigh, axis=0)
+    iqr   = np.quantile(base, 0.75,  axis=0) - np.quantile(base, 0.25, axis=0)
+    std   = base.std(axis=0)
+    scale = np.where(iqr > 1e-6, iqr, np.where(std > 1e-6, std, 1.0)).astype(np.float32)
+
+    n = len(candidates)
+    idx1 = rng.integers(0, len(pool), size=n)
+    idx2 = rng.integers(0, len(pool), size=n)
+    p1, p2 = pool[idx1], pool[idx2]
+
+    if cx_alpha > 0:
+        a = rng.beta(cx_alpha, cx_alpha, size=n).astype(np.float32)
+    else:
+        a = rng.random(n, dtype=np.float32)
+
+    child = (a[:,None] * p1 + (1.0 - a[:,None]) * p2).astype(np.float32)
+    child += rng.normal(0.0, mutate_sigma, size=child.shape).astype(np.float32) * scale
+    child = np.clip(child, q_lo, q_hi, out=child)
+    return child
+
 
 def oversample_to_const(X, y, target_n, seed=42):
     """Duplicate malware (y=1) with replacement until len == target_n."""
@@ -365,6 +491,7 @@ def main():
     gaug.add_argument("--use-gan", action="store_true")
     gaug.add_argument("--oversample", action="store_true")
     gaug.add_argument("--smote", action="store_true")
+    gaug.add_argument("--use-evo", action="store_true")
 
     # --- GAN options ---
     ap.add_argument("--gan-generator", type=str, default=None)
@@ -409,6 +536,26 @@ def main():
                     help="Cap majority/minority ratio after augmentation (1.0 = 50/50).")
     ap.add_argument("--metrics-subdir", type=str, default="",
                 help="Write metrics/preds under data/processed/metrics/<subdir>/")
+    
+    # --- Evo-GAN refinement over GAN candidates ---
+    ap.add_argument("--gan-evo-refine", action="store_true",
+                    help="Apply evolutionary crossover/mutation to GAN candidates before quality filtering.")
+    ap.add_argument("--evo-parent-source", choices=["gan","real","both"], default="both",
+                    help="Parent pool for Evo-GAN refinement: GAN-only, real positives, or both.")
+    
+    ap.add_argument("--evo-like", choices=["scarce","full"], default="scarce")
+    ap.add_argument("--evo-synth-per-real", type=float, default=2.0)
+    ap.add_argument("--evo-qmult", type=float, default=5.0)
+    ap.add_argument("--evo-quality", choices=["none","nn","nn_boundary"], default="nn_boundary")
+    ap.add_argument("--evo-mutate-sigma", type=float, default=0.10,
+                    help="Gaussian mutation scale (× robust feature scale)")
+    ap.add_argument("--evo-cx-alpha", type=float, default=2.0,
+                    help="Beta(alpha,alpha) for convex mix (2→peaked near 0.5)")
+    ap.add_argument("--evo-qlow", type=float, default=0.01)
+    ap.add_argument("--evo-qhigh", type=float, default=0.99)
+    ap.add_argument("--evo-boundary-low", type=float, default=0.20)
+    ap.add_argument("--evo-boundary-high", type=float, default=0.60)
+    ap.add_argument("--evo-boundary-k", type=int, default=5)
 
     args = ap.parse_args()
 
@@ -426,9 +573,14 @@ def main():
 
     # resolve variant string (for bookkeeping)
     variant = "real"
-    if args.use_gan: variant = "gan"
-    elif args.oversample: variant = "oversample"
-    elif args.smote: variant = "smote"
+    if args.use_gan:
+        variant = "evogan" if args.gan_evo_refine else "gan"   # NEW
+    elif args.oversample:
+        variant = "oversample"
+    elif args.smote:
+        variant = "smote"
+    elif getattr(args, "use_evo", False):
+        variant = "evo"
 
     # load data + split
     X, y = load_xy()
@@ -533,6 +685,13 @@ def main():
                 boundary_low=args.gan_boundary_low,
                 boundary_high=args.gan_boundary_high,
                 boundary_k=args.gan_boundary_k,
+                # Evo-GAN refinement
+                evo_refine=args.gan_evo_refine,
+                evo_parent_source=args.evo_parent_source,
+                evo_mutate_sigma=args.evo_mutate_sigma,
+                evo_cx_alpha=args.evo_cx_alpha,
+                evo_qlow=args.evo_qlow,
+                evo_qhigh=args.evo_qhigh,
             )
             n_synth = int((ytr == 1).sum() - n_real_pos)  # record actual synth count
 
@@ -543,7 +702,22 @@ def main():
         elif args.smote:
             Xtr, ytr = smote_to_const(Xtr, ytr, int(args.const_train_size), seed=args.seed, k=5)
             n_synth = int(args.const_train_size) - n_train_real_before
-
+        elif args.use_evo:
+            X_like = like_src[1] if args.evo_like == "scarce" else Xtr_full[ytr_full == 1]
+            if X_like.size == 0:
+                X_like = Xtr_full[ytr_full == 1]
+            n_synth = max(0, int(args.const_train_size) - len(ytr))
+            n_synth = min(n_synth, int(args.evo_synth_per_real * max(1, n_real_pos)))
+            Xtr, ytr = add_evo_synth(
+                Xtr, ytr, X_like, n_synth,
+                seed=args.seed, qmult=args.evo_qmult, quality=args.evo_quality,
+                X_neg_for_quality=Xtr_full[ytr_full == 0],
+                qlow=args.evo_qlow, qhigh=args.evo_qhigh,
+                mutate_sigma=args.evo_mutate_sigma, cx_alpha=args.evo_cx_alpha,
+                boundary_low=args.evo_boundary_low, boundary_high=args.evo_boundary_high,
+                boundary_k=args.evo_boundary_k,
+            )
+            n_synth = int((ytr == 1).sum() - n_real_pos)
         else:
             pass
 

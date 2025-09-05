@@ -132,7 +132,7 @@ def plot_from_raw(df_raw, out_dir, metrics, logx, draw_bands):
 
     # split variants
     real = agg[agg["variant"] == "real"].copy()
-    methods = {m: agg[agg["variant"] == m].copy() for m in ("gan", "oversample", "smote")}
+    methods = {m: agg[agg["variant"] == m].copy() for m in ("gan", "oversample", "smote", "evo", "evogan")}
 
     # collapse REAL by (prefix, frac)  (const_train_size is NaN for real in raw.csv)
     cols = [(f"{m}_mean", f"{m}_std") for m in metrics]
@@ -189,7 +189,7 @@ def plot_from_raw(df_raw, out_dir, metrics, logx, draw_bands):
 
             # Methods
             deltas = {}
-            for name in ("gan", "oversample", "smote"):
+            for name in ("gan", "oversample", "smote", "evo", "evogan"):
                 dfm = aligned[name]
                 if dfm is None or f"{m}_mean" not in (dfm.columns if dfm is not None else []):
                     y = np.full_like(x, np.nan, dtype=float)

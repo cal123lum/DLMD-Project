@@ -9,8 +9,8 @@ FRACS_DEFAULT = [0.0005,0.001,0.0015,0.002,0.0025,0.003,0.0035,0.004,0.0045,0.00
                  0.0055,0.006,0.0065,0.007,0.0075,0.008,0.0085,0.009,0.0095,0.01]
 SEEDS_DEFAULT = [42, 1337, 2025]
 
-MET_IID = ROOT / "data" / "processed" / "metrics" / "iid_scarcity"
-GAN_DIR = ROOT / "models" / "gan" / "iid"
+MET_IID = ROOT / "data" / "processed" / "metrics" / "iid_final"
+GAN_DIR = ROOT / "models" / "gan" / "iid_final"
 
 def run(cmd):
     print("[run]", " ".join(map(str, cmd)), flush=True)
@@ -37,6 +37,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--fractions", type=str, default=",".join(map(str, FRACS_DEFAULT)))
     ap.add_argument("--seeds", type=str, default=",".join(map(str, SEEDS_DEFAULT)))
+    ap.add_argument(
+        "--methods",
+        type=str,
+        default="real,gan,oversample,smote,evo,evogan",
+        help="Comma list subset to run (e.g. 'evo,evogan')."
+    )
 
     # train-time constraints
     ap.add_argument("--const-train-size", type=int, default=20000)
@@ -123,7 +129,9 @@ def main():
             "--rf-n-est", str(args.rf_n_est),
             "--seed", str(seed),
             "--split-json", str(split_json),
-            "--metrics-subdir", "iid_scarcity",  # write under MET_IID
+            "--metrics-subdir", "iid_final", 
+            "--balance-after-argument",
+            "--balance-ratio", "1.0",
         ]
 
         methods = [
@@ -133,13 +141,44 @@ def main():
                 "--gan-generator", str(gen_path),
                 "--gan-scaler",    str(scaler_path),
                 "--gan-like", "full",
-                "--gan-synth-per-real", "80",
+                "--gan-synth-per-real", "2",      
                 "--gan-quality", "nn_boundary",
                 "--gan-qmult", "5",
             ]),
             ("oversample", ["--oversample"]),
             ("smote",      ["--smote"]),
+            ("evo",        [                         #
+                "--use-evo",
+                "--evo-like", "full",
+                "--evo-synth-per-real", "2",        # match GAN cap for parity
+                "--evo-quality", "nn_boundary",
+                "--evo-qmult", "5",
+                "--evo-mutate-sigma", "0.10",
+                "--evo-cx-alpha", "2.0",
+                "--evo-qlow", "0.01", "--evo-qhigh", "0.99",
+                "--evo-boundary-low", "0.20", "--evo-boundary-high", "0.60",
+                "--evo-boundary-k", "5",
+            ]),
+            ("evogan", [
+                "--use-gan",
+                "--gan-evo-refine",                 # <— turn on the hybrid
+                "--gan-generator", str(gen_path),
+                "--gan-scaler",    str(scaler_path),
+                "--gan-like", "full",
+                "--gan-synth-per-real", "2",
+                "--gan-quality", "nn_boundary",
+                "--gan-qmult", "5",
+                # Evo-GAN refinement knobs (reusing your EVO params)
+                "--evo-parent-source", "both",
+                "--evo-mutate-sigma", "0.10",
+                "--evo-cx-alpha", "2.0",
+                "--evo-qlow", "0.01", "--evo-qhigh", "0.99",
+                "--evo-boundary-low", "0.20", "--evo-boundary-high", "0.60",
+                "--evo-boundary-k", "5",
+            ]),
         ]
+        want = {m.strip().lower() for m in args.methods.split(",") if m.strip()}
+        methods = [(name, extra) for (name, extra) in methods if name in want]
 
         for frac in fracs:
             for variant, extra in methods:

@@ -6,8 +6,8 @@ import json
 from src.paths import ROOT
 
 SPLITS_DIR = ROOT / "data" / "processed" / "splits" / "family_lofo"
-GAN_DIR    = ROOT / "models" / "gan" / "family"
-MET_FAM    = ROOT / "data" / "processed" / "metrics" / "family"
+GAN_DIR    = ROOT / "models" / "gan" / "family_final"
+MET_FAM    = ROOT / "data" / "processed" / "metrics" / "family_final"
 
 # scarcity levels & robustness seeds
 FRACS = [0.0005,0.001, 0.0015, 0.002, 0.0025, 0.003, 0.0035, 0.004, 0.0045, 0.005, 0.0055, 0.006, 0.0065, 0.007, 0.0075, 0.008, 0.0085, 0.009, 0.0095, 0.01]
@@ -134,6 +134,8 @@ def main():
             "--balance-after-augment",
             "--rf-class-weight", "none",
             "--rf-max-depth", "20",
+            "--metrics-subdir", "family_final",
+            "--seed", str(seed)
         ]
 
         methods = [
@@ -142,14 +144,43 @@ def main():
                 "--use-gan",
                 "--gan-generator", str(gen_path),
                 "--gan-scaler",    str(scaler_path),
-                "--gan-like", "full",                 # or "scarce" if you prefer
+                "--gan-like", "full",
                 "--gan-synth-per-real", "2",
                 "--gan-quality", "nn_boundary",
                 "--gan-qmult", "5",
             ]),
+            ("evogan",     [
+                "--use-gan",
+                "--gan-evo-refine",
+                "--gan-generator", str(gen_path),
+                "--gan-scaler",    str(scaler_path),
+                "--gan-like", "full",
+                "--gan-synth-per-real", "2",
+                "--gan-quality", "nn_boundary",
+                "--gan-qmult", "5",
+                "--evo-parent-source", "gan",
+                "--evo-mutate-sigma", "0.15",
+                "--evo-cx-alpha", "2.0",
+                "--evo-qlow", "0.01", "--evo-qhigh", "0.99",
+                "--evo-boundary-low", "0.15", "--evo-boundary-high", "0.70",
+                "--evo-boundary-k", "5",
+            ]),
+            ("evo",        [
+                "--use-evo",
+                "--evo-like", "full",
+                "--evo-synth-per-real", "2",
+                "--evo-quality", "nn_boundary",
+                "--evo-qmult", "5",
+                "--evo-mutate-sigma", "0.10",
+                "--evo-cx-alpha", "2.0",
+                "--evo-qlow", "0.01", "--evo-qhigh", "0.99",
+                "--evo-boundary-low", "0.20", "--evo-boundary-high", "0.60",
+                "--evo-boundary-k", "5",
+            ]),
             ("oversample", ["--oversample"]),
             ("smote",      ["--smote"]),
         ]
+
 
         for frac in FRACS:
             for seed in SEEDS:
