@@ -130,8 +130,6 @@ def main():
             "--seed", str(seed),
             "--split-json", str(split_json),
             "--metrics-subdir", "iid_final", 
-            "--balance-after-argument",
-            "--balance-ratio", "1.0",
         ]
 
         methods = [
@@ -141,8 +139,8 @@ def main():
                 "--gan-generator", str(gen_path),
                 "--gan-scaler",    str(scaler_path),
                 "--gan-like", "full",
-                "--gan-synth-per-real", "2",      
-                "--gan-quality", "nn_boundary",
+                "--gan-synth-per-real", "40",      
+                "--gan-quality", "nn",
                 "--gan-qmult", "5",
             ]),
             ("oversample", ["--oversample"]),
@@ -150,8 +148,8 @@ def main():
             ("evo",        [                         #
                 "--use-evo",
                 "--evo-like", "full",
-                "--evo-synth-per-real", "2",        # match GAN cap for parity
-                "--evo-quality", "nn_boundary",
+                "--evo-synth-per-real", "40",        # match GAN cap for parity
+                "--evo-quality", "nn",
                 "--evo-qmult", "5",
                 "--evo-mutate-sigma", "0.10",
                 "--evo-cx-alpha", "2.0",
@@ -165,11 +163,11 @@ def main():
                 "--gan-generator", str(gen_path),
                 "--gan-scaler",    str(scaler_path),
                 "--gan-like", "full",
-                "--gan-synth-per-real", "2",
-                "--gan-quality", "nn_boundary",
+                "--gan-synth-per-real", "40",
+                "--gan-quality", "nn",
                 "--gan-qmult", "5",
                 # Evo-GAN refinement knobs (reusing your EVO params)
-                "--evo-parent-source", "both",
+                "--evo-parent-source", "gan",
                 "--evo-mutate-sigma", "0.10",
                 "--evo-cx-alpha", "2.0",
                 "--evo-qlow", "0.01", "--evo-qhigh", "0.99",
@@ -212,7 +210,7 @@ def main():
                     prefix="iid",
                     kind="iid",
                     frac=float(frac),
-                    const_train_size=int(args.const_train_size),
+                    const_train_size=0,
                     variant=m.get("variant","real"),
                     used_gan=bool(m.get("used_gan", False)),
                     tag=tag,

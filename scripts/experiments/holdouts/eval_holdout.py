@@ -24,6 +24,8 @@ from src.augmentation import config_aug as C
 METRICS_DIR = ROOT / "data" / "processed" / "metrics"
 PRED_DIR    = ROOT / "data" / "processed" / "preds"
 METRICS_BASE = ROOT / "data" / "processed" / "metrics"
+_GEN_CACHE = {}
+_SCALER_CACHE = {}
 
 # ----------------- helpers -----------------
 def load_metric_json(tag: str, *, subdir: str, kind: str = "temporal"):
@@ -248,6 +250,25 @@ def add_gan_synth(
                 keep_idx = np.concatenate([idx, fill_order[:max(0, n_synth - len(idx))]])
     else:
         raise ValueError(f"unknown quality mode: {quality}")
+    
+
+    if generator_path in _GEN_CACHE:
+        G = _GEN_CACHE[generator_path]
+    else:
+        G = Generator().cpu()
+        sd = torch.load(generator_path, map_location="cpu")
+        G.load_state_dict(sd); G.eval()
+        _GEN_CACHE[generator_path] = G
+
+    if scaler_npz:
+        if scaler_npz in _SCALER_CACHE:
+            mean, scale = _SCALER_CACHE[scaler_npz]
+        else:
+            sc = np.load(scaler_npz)
+            mean, scale = sc["mean_"].astype(np.float32), sc["scale_"].astype(np.float32)
+            _SCALER_CACHE[scaler_npz] = (mean, scale)
+        X_syn = X_syn * scale + mean
+
 
     X_keep = X_syn[keep_idx]
     y_keep = np.ones(len(X_keep), dtype=y_real.dtype)
@@ -556,6 +577,8 @@ def main():
     ap.add_argument("--evo-boundary-low", type=float, default=0.20)
     ap.add_argument("--evo-boundary-high", type=float, default=0.60)
     ap.add_argument("--evo-boundary-k", type=int, default=5)
+    ap.add_argument("--rf-n-jobs", type=int, default=-1)
+
 
     args = ap.parse_args()
 
@@ -757,7 +780,7 @@ def main():
             n_estimators=args.rf_n_est,
             max_depth=args.rf_max_depth,
             class_weight=(None if args.rf_class_weight == "none" else "balanced"),
-            n_jobs=-1,
+            n_jobs=args.rf_max_depth,
             random_state=args.seed,
             oob_score=False
         )

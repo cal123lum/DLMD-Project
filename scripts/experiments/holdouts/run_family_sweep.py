@@ -10,7 +10,7 @@ GAN_DIR    = ROOT / "models" / "gan" / "family_final"
 MET_FAM    = ROOT / "data" / "processed" / "metrics" / "family_final"
 
 # scarcity levels & robustness seeds
-FRACS = [0.0005,0.001, 0.0015, 0.002, 0.0025, 0.003, 0.0035, 0.004, 0.0045, 0.005, 0.0055, 0.006, 0.0065, 0.007, 0.0075, 0.008, 0.0085, 0.009, 0.0095, 0.01]
+FRACS = [0.0005, 0.001, 0.0015, 0.002, 0.0025, 0.003, 0.0035, 0.004, 0.0045, 0.005, 0.0055, 0.006, 0.0065, 0.007, 0.0075, 0.008, 0.0085, 0.009, 0.0095, 0.01]
 SEEDS = [42, 1337, 2025]
 
 # train-time constraints
@@ -24,7 +24,7 @@ def run(cmd):
 def load_metric_json(tag: str):
     """eval_holdout writes 'rf_{kind}_metrics_{tag}.json' but it internally
     prefixes the tag with an underscore; try both to be safe."""
-    base = ROOT / "data" / "processed" / "metrics"
+    base = MET_FAM
     p1 = base / f"rf_family_metrics_{tag}.json"
     p2 = base / f"rf_family_metrics__{tag}.json"  # leading underscore
     if p1.exists():
@@ -59,6 +59,7 @@ def main():
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--lambda-gp", type=float, default=10.0)
     ap.add_argument("--gan-extra", type=str, default="", help="extra args for train_gan (quoted)")
+
     args = ap.parse_args()
 
     splits = sorted(SPLITS_DIR.glob("holdout_*.json"))
@@ -128,14 +129,14 @@ def main():
         outdir  = MET_FAM / family
         raw_csv = outdir / "raw.csv"
 
-        # common eval flags (do NOT duplicate these in per-method extras)
+        # common eval flags
         common = [
             "--val-threshold", "balacc",
-            "--balance-after-augment",
             "--rf-class-weight", "none",
             "--rf-max-depth", "20",
+            "--rf-n-est","400",
+            "--rf-n-jobs", "-1",
             "--metrics-subdir", "family_final",
-            "--seed", str(seed)
         ]
 
         methods = [
@@ -145,8 +146,8 @@ def main():
                 "--gan-generator", str(gen_path),
                 "--gan-scaler",    str(scaler_path),
                 "--gan-like", "full",
-                "--gan-synth-per-real", "2",
-                "--gan-quality", "nn_boundary",
+                "--gan-synth-per-real", "40",
+                "--gan-quality", "nn",
                 "--gan-qmult", "5",
             ]),
             ("evogan",     [
@@ -155,8 +156,8 @@ def main():
                 "--gan-generator", str(gen_path),
                 "--gan-scaler",    str(scaler_path),
                 "--gan-like", "full",
-                "--gan-synth-per-real", "2",
-                "--gan-quality", "nn_boundary",
+                "--gan-synth-per-real", "40",
+                "--gan-quality", "nn",
                 "--gan-qmult", "5",
                 "--evo-parent-source", "gan",
                 "--evo-mutate-sigma", "0.15",
@@ -168,8 +169,8 @@ def main():
             ("evo",        [
                 "--use-evo",
                 "--evo-like", "full",
-                "--evo-synth-per-real", "2",
-                "--evo-quality", "nn_boundary",
+                "--evo-synth-per-real", "40",
+                "--evo-quality", "nn",
                 "--evo-qmult", "5",
                 "--evo-mutate-sigma", "0.10",
                 "--evo-cx-alpha", "2.0",
@@ -217,7 +218,7 @@ def main():
                         prefix=f"fam_{family}",
                         kind="family",
                         frac=float(frac),
-                        const_train_size=int(CONST_TRAIN_SIZE),
+                        const_train_size=0,
                         variant=m.get("variant","real"),
                         used_gan=bool(m.get("used_gan", False)),
                         tag=tag,

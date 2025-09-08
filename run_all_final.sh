@@ -2,9 +2,9 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# Always activate venv
+# venv + pythonpath
 source venv/bin/activate
-export PYTHONPATH="$PWD:$PYTHONPATH"
+export PYTHONPATH="$PWD:${PYTHONPATH:-}"
 
 # ---------- 1) IID FINAL ----------
 venv/bin/python -m scripts.experiments.iid.run_iid_scarcity_sweep \
@@ -12,15 +12,14 @@ venv/bin/python -m scripts.experiments.iid.run_iid_scarcity_sweep \
   --seeds "42,1337,2025" \
   --const-train-size 20000 \
   --min-train-pos 50 --min-train-neg 50 \
-  --epochs 80 --max-gan-malware 50000 --batch-size 128 --n-critic 4 --device auto \
+  --epochs 30 --max-gan-malware 50000 --batch-size 128 --n-critic 5 --device auto \
   --rf-n-est 400 --rf-max-depth 20 --rf-class-weight none --val-threshold balacc
 
 # ---------- 2) TEMPORAL FINAL ----------
-# Assumes you edited run_temporal_sweep.sh as above (final dirs + GAN args + compare)
-bash scripts/experiments/holdouts/run_temporal_sweep.sh
+venv/bin/python scripts/experiments/holdouts/run_temporal_sweep.py
 
 # ---------- 3) FAMILY FINAL ----------
 venv/bin/python -m scripts.experiments.holdouts.run_family_sweep \
-  --epochs 80 --max-gan-malware 50000 --batch-size 128 --n-critic 4 --device auto
+  --epochs 30 --max-gan-malware 50000 --batch-size 128 --n-critic 5 --device auto
 
 echo "All FINAL runs completed."
