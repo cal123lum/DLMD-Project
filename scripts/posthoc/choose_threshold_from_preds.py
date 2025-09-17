@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
+# scripts/posthoc/choose_threshold_from_preds.py
+# Author: Callum Musselwhite
+# Purpose: pool predictions across tags within each (prefix, frac, variant), pick a non-degenerate TEST threshold, then rewrite per-tag metrics at that threshold
+# Last edit: 2025-09-17
+
 import argparse, numpy as np, pandas as pd
 from pathlib import Path
 from sklearn.metrics import f1_score, balanced_accuracy_score, matthews_corrcoef
 
 PRED_DIR = Path("data/processed/preds")
 
-# --- robust NPZ loader -------------------------------------------------------
+# robust NPZ loader
 def load_preds(npz_path: Path):
+    # accept multiple key spellings for y and proba to be resilient to upstream changes
     z = np.load(npz_path, allow_pickle=True)
     keys = {k.lower(): k for k in z.files}
 
@@ -15,28 +21,29 @@ def load_preds(npz_path: Path):
     p_keys = [k for k in keys if any(s in k for s in ["y_proba","proba","prob","score","scores","y_score","preds"])]
 
     def pick_y():
+        # prefer 1D int arrays for labels
         for k in y_keys:
             a = z[keys[k]]
             if a.dtype.kind in "biu" and a.ndim == 1:
                 return a.astype(int)
-        # fallback: pick 1D int-like smallest array
+        # fallback to any 1D int-like array if exact names not found
         cand = [z[keys[k]] for k in z.files if z[keys[k]].ndim==1]
         cand = [a for a in cand if a.dtype.kind in "biu"]
         return (cand[0] if cand else z[z.files[0]]).astype(int)
 
     def pick_p():
-        # prefer 1D float in [0,1]
+        # prefer 1D float probabilities in [0,1]
         for k in p_keys:
             a = z[keys[k]].astype(float).ravel()
             if a.ndim==1 and np.isfinite(a).all():
                 if a.min() >= -1e-6 and a.max() <= 1+1e-6:
                     return a.clip(0,1)
-        # fallback: any 1D float array
+        # fallback to any 1D float array
         for k in z.files:
             a = z[k]
             if a.ndim==1 and a.dtype.kind == "f":
                 return a.astype(float)
-        # last resort: if we got a 2D [n,2], take column 1
+        # last resort take column 1 of a 2-column score matrix
         for k in z.files:
             a = z[k]
             if a.ndim==2 and a.shape[1]==2 and a.dtype.kind=="f":
@@ -46,11 +53,12 @@ def load_preds(npz_path: Path):
     y = pick_y()
     p = pick_p()
     if y.shape[0] != p.shape[0]:
-        # try to broadcast if p is [n,2]
+        # explicit guard against mismatched NPZ contents
         raise ValueError(f"shape mismatch {y.shape} vs {p.shape} in {npz_path}")
     return y, p
 
 def infer_variant(tag: str, const_train_size):
+    # infer method label from tag string as a fallback when variant is missing in CSV
     tag = (tag or "").lower()
     if "_gan" in tag: return "gan"
     if "_os" in tag or "_oversample" in tag: return "oversample"
@@ -58,8 +66,9 @@ def infer_variant(tag: str, const_train_size):
     if "_real" in tag: return "real"
     return "real" if (pd.isna(const_train_size) or float(const_train_size) != float(const_train_size)) else "real"
 
-# --- threshold search (non-degenerate) ---------------------------------------
+# threshold search (non-degenerate) 
 def pick_threshold_non_degenerate(y, p, objective="balanced_accuracy", n_grid=512):
+    # avoid degenerate thresholds that predict all one class
     p = np.asarray(p, float); y = np.asarray(y, int)
     pmin, pmax = float(p.min()), float(p.max())
     if not np.isfinite([pmin,pmax]).all() or pmin == pmax:
@@ -73,7 +82,7 @@ def pick_threshold_non_degenerate(y, p, objective="balanced_accuracy", n_grid=51
     for t in grid:
         yhat = (p >= t).astype(int)
         s1 = yhat.sum()
-        if s1 == 0 or s1 == yhat.size:  # skip all-zeros/all-ones
+        if s1 == 0 or s1 == yhat.size:  # skip all-zeros or all-ones
             continue
         if objective == "balanced_accuracy":
             s = balanced_accuracy_score(y, yhat)
@@ -87,7 +96,7 @@ def pick_threshold_non_degenerate(y, p, objective="balanced_accuracy", n_grid=51
 
     return best_t, (None if best_s < 0 else best_s)
 
-# --- main --------------------------------------------------------------------
+# main 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("raw_csv")
@@ -95,12 +104,13 @@ def main():
                     choices=["balanced_accuracy","mcc","f1"])
     ap.add_argument("--n-grid", type=int, default=512)
     ap.add_argument("--out-suffix", default=None,
-                    help="override output suffix (else _baopt/_mccopt/_f1opt)")
+                    help="override output suffix else _baopt/_mccopt/_f1opt")
     args = ap.parse_args()
 
     raw = Path(args.raw_csv)
     df = pd.read_csv(raw)
 
+    # backfill variant if missing in the input CSV
     if "variant" not in df.columns:
         df["variant"] = [infer_variant(str(t), r.get("const_train_size"))
                          for t, (_, r) in zip(df["tag"], df.iterrows())]
@@ -109,17 +119,18 @@ def main():
     keys = ["prefix","frac","variant"]
     thr_map, rows_info = {}, []
 
+    # pick one threshold per (prefix, frac, variant) by pooling NPZs belonging to that group
     for gvals, sub in df.groupby(keys):
         ys, ps = [], []
         for tag in sub["tag"].astype(str):
             npz = PRED_DIR / f"rf_temporal_preds_{tag}.npz"
-            if not npz.exists(): continue
+            if not npz.exists(): 
+                continue
             try:
                 y, p = load_preds(npz)
                 ys.append(y); ps.append(p)
             except Exception as e:
-                # comment the next line if too chatty
-                # print(f"[skip] {npz}: {e}")
+                # keep going if a single NPZ is malformed
                 continue
         if not ys:
             continue
@@ -130,6 +141,7 @@ def main():
         rows_info.append((*gvals, thr, score,
                           int((y_all==1).sum()), int((y_all==0).sum())))
 
+    # rewrite per-row metrics at the chosen group threshold where preds exist
     out_rows = []
     for _, r in df.iterrows():
         gkey = (r["prefix"], r["frac"], r["variant"])
@@ -155,6 +167,7 @@ def main():
     pd.DataFrame(out_rows).to_csv(out, index=False)
     print(f"[ok] wrote {out}")
 
+    # quick peek at thresholds chosen per group for sanity
     if rows_info:
         info = pd.DataFrame(rows_info,
                             columns=["prefix","frac","variant","threshold",

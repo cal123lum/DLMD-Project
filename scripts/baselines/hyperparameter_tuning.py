@@ -1,4 +1,9 @@
-# src/hyperparameter_tuning.py
+#!/usr/bin/env python3
+# scripts/baselines/hyperparameter_tuning.py
+# Hyperparameter tuning for RandomForest on BODMAS
+# Author: Callum Musselwhite
+# Last Edit: 2025-09-17
+# Purpose: randomized hyperparameter search using stratified CV and AUC scoring
 
 import os
 import numpy as np
@@ -8,64 +13,65 @@ from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold, train_t
 from scipy.stats import randint
 import config
 
+
 def main():
-    # 1) Load full data
+    """Randomized hyperparameter search for a RandomForest on BODMAS features"""
+
+    # Load feature matrix and labels from the configured NPZ
     data = np.load(config.NPZ_PATH)
-    X, y = data['X'], data['y']
-    print(f"Loaded {X.shape[0]} samples × {X.shape[1]} features")
+    X, y = data["X"], data["y"]
+    print(f"Loaded {X.shape[0]} samples x {X.shape[1]} features")
 
-    # 2) (Optional) Subsample for speed
-    #    Comment out this block if you want to tune on the full set.
+    # Optional speed-up: tune on a 20% stratified subset
+    # Comment this block out if you want to use the full dataset
     X, _, y, _ = train_test_split(
-        X, y,
-        train_size=0.2,           # use 20% of data for tuning
+        X,
+        y,
+        train_size=0.2,
         stratify=y,
-        random_state=config.RANDOM_STATE
+        random_state=config.RANDOM_STATE,
     )
-    print(f"Subsampled to {X.shape[0]} for hyperparam search")
+    print(f"Subsampled to {X.shape[0]} for hyperparameter search")
 
-    # 3) Define RF and parameter distributions
+    # Base estimator and search space
     rf = RandomForestClassifier(
         oob_score=True,
         random_state=config.RANDOM_STATE,
-        n_jobs=-1
+        n_jobs=-1,
     )
     param_dist = {
-        'n_estimators': randint(50, 200),       # try between 50 and 200 trees
-        'max_depth': [None] + list(range(10, 101, 10)),  # None or depths 10,20,…100
-        'min_samples_split': randint(2, 11),    # try 2–10
-        'min_samples_leaf': randint(1, 11),     # try 1–10
+        "n_estimators": randint(50, 200),
+        "max_depth": [None] + list(range(10, 101, 10)),
+        "min_samples_split": randint(2, 11),
+        "min_samples_leaf": randint(1, 11),
     }
 
-    # 4) Randomized search with 3-fold stratified CV
-    cv = StratifiedKFold(
-        n_splits=3,
-        shuffle=True,
-        random_state=config.RANDOM_STATE
-    )
+    # Randomized search with stratified 3-fold CV; AUC is the target metric
+    cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=config.RANDOM_STATE)
     search = RandomizedSearchCV(
         estimator=rf,
         param_distributions=param_dist,
-        n_iter=20,                  # number of sampled parameter settings
-        scoring='roc_auc',
+        n_iter=20,
+        scoring="roc_auc",
         cv=cv,
         n_jobs=-1,
         random_state=config.RANDOM_STATE,
-        verbose=2
+        verbose=2,
     )
 
-    print("Starting hyperparameter search…")
+    print("Starting hyperparameter search...")
     search.fit(X, y)
 
-    # 5) Report & save best
-    print("\n🔍 Best parameters found:")
+    # Report and persist the best model
+    print("\nBest parameters found:")
     for k, v in search.best_params_.items():
         print(f"  {k}: {v}")
     print(f"Best CV AUC = {search.best_score_:.4f}")
 
-    os.makedirs('models', exist_ok=True)
-    joblib.dump(search.best_estimator_, 'models/rf_tuned.joblib')
-    print("✅ Saved tuned model to models/rf_tuned.joblib\n")
+    os.makedirs("models", exist_ok=True)
+    joblib.dump(search.best_estimator_, "models/rf_tuned.joblib")
+    print("Saved tuned model to models/rf_tuned.joblib\n")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

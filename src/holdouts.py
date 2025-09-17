@@ -1,4 +1,6 @@
 # src/holdouts.py
+# last edit: 2025-09-17
+# author: Callum Musselwhite
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,7 +57,7 @@ def family_holdout_with_benign(
     fam = families.astype(str).str.strip()
     idx = np.arange(len(fam))
 
-    # Guard: don't hold out Benign as a 'family'
+    # Guard: don't hold out Benign as a family
     if any(benign_label.lower() == f.lower().strip() for f in heldout_families):
         raise ValueError(f"'{benign_label}' is the benign label; do not pass it as a held-out family.")
 

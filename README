@@ -1,0 +1,17 @@
+# GAN- & EVO-based Data Augmentation for Malware Classification under Data Scarcity
+
+This repo evaluates whether three augmentation strategies—**GAN (WGAN-GP)**, **EVO** (feature-space evolutionary synthesiser), and **EvoGAN** (EA refinement of GAN samples)—improve static Windows-PE malware detection when **labeled positives are scarce** and under **distribution shift** (temporal and leave-one-family-out). We compare against **Real-only**, **ROS**, and **SMOTE** using a fixed **Random Forest** downstream classifier and report **ROC-AUC** (primary), **PR-AUC**, **Balanced Accuracy**, **F1**, and **MCC**.
+
+**Key result (one line):** Augmentation helps most at **extreme scarcity**; **EVO** is consistently strongest under i.i.d., temporal, and LOFO settings. Gains taper as real data increases.
+
+---
+
+## Environment Setup
+
+```bash
+# Python 3.10+ (tested with 3.11/3.12/3.13)
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# Repo Layout
