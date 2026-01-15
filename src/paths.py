@@ -27,3 +27,5 @@ HOLDOUTS_DIR = ROOT / "data" / "holdouts"
 TEMPORAL_SPLIT = HOLDOUTS_DIR / "temporal_indices.json"
 FAMILY_SPLIT = HOLDOUTS_DIR / "family_indices.json"
 BODMAS_META_CSV = ROOT / "data" / "raw" / "bodmas_metadata.csv"
+EMBER_NPZ = DATA_RAW / "ember.npz"
+

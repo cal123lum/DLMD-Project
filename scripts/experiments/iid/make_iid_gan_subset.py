@@ -16,10 +16,11 @@ def main():
     ap.add_argument("--max-train-rows", type=int, default=20000, help="cap malware train rows")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--out", required=True, help="where to write gan_subset_indices.json")
+    ap.add_argument("--npz", type=str, default=str(BODMAS_NPZ))
     args = ap.parse_args()
 
     # load labels
-    z = np.load(str(BODMAS_NPZ), allow_pickle=True)
+    z = np.load(args.npz, allow_pickle=True)
     y = z["y"].astype(int)
 
     # read IID split and collect malware indices from TRAIN

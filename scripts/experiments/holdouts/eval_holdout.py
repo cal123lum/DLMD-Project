@@ -570,6 +570,9 @@ def main():
     ap.add_argument("--evo-boundary-high", type=float, default=0.60)
     ap.add_argument("--evo-boundary-k", type=int, default=5)
     ap.add_argument("--rf-n-jobs", type=int, default=-1)
+    ap.add_argument("--npz", type=str, default=str(ROOT / "data" / "raw" / "bodmas.npz"))
+    ap.add_argument("--meta-csv", type=str, default=str(ROOT / "data" / "raw" / "bodmas_metadata.csv"))
+
 
     args = ap.parse_args()
 
@@ -594,12 +597,15 @@ def main():
         variant = "evo"
 
     # data and split
-    X, y = load_xy()
+    z = np.load(args.npz, allow_pickle=True)
+    X, y = z["X"], z["y"].astype(int)
     kind = "temporal" if args.use_temporal else ("family" if args.use_family else "custom")
     split = SplitIndices.from_json(split_path)
 
     # metadata for sha and timestamps
-    meta = load_metadata()
+    meta = pd.read_csv(args.meta_csv).fillna("")
+    if "timestamp" in meta.columns:
+        meta["timestamp"] = pd.to_datetime(meta["timestamp"], utc=True, errors="coerce")
     sha_all = None
     try:
         if "sha" in meta.columns:

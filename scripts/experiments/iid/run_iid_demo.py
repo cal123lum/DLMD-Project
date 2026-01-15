@@ -2,44 +2,42 @@
 # scripts/experiments/iid/run_iid_sweep.py
 # IID sweep: build splits, train or reuse GAN per seed, fit scaler, then evaluate across fractions × methods
 # Author: Callum Musselwhite
-# Last edit: 2026-01-14
-# Purpose: orchestrate IID experiments to mirror holdout sweeps while supporting multiple datasets (bodmas/ember/...)
+# Last edit: 2025-09-17
+# Purpose: orchestrate IID experiments to mirror the holdout sweeps while keeping parity in RF and augmentation flags
 
-import argparse
-import json
-import shlex
-import subprocess
-import sys
+import argparse, json, subprocess, sys, shlex
 from pathlib import Path
-
 import pandas as pd
 from src.paths import ROOT
 
-
-FRACS_DEFAULT = [
-    0.0005, 0.001, 0.0015, 0.002, 0.0025, 0.003, 0.0035, 0.004, 0.0045, 0.005,
-    0.0055, 0.006, 0.0065, 0.007, 0.0075, 0.008, 0.0085, 0.009, 0.0095, 0.01
-]
+# defaults for scarcity and seeds
+FRACS_DEFAULT = [0.0005,0.001,0.0015,0.002,0.0025,0.003,0.0035,0.004,0.0045,0.005,
+                 0.0055,0.006,0.0065,0.007,0.0075,0.008,0.0085,0.009,0.0095,0.01]
 SEEDS_DEFAULT = [42, 1337, 2025]
+
+# output locations
+MET_IID = ROOT / "data" / "processed" / "metrics" / "iid_final_demo"
+GAN_DIR = ROOT / "models" / "gan" / "iid_final"
 
 
 def run(cmd):
+    # echo and execute a subprocess command
     print("[run]", " ".join(map(str, cmd)), flush=True)
     subprocess.run(list(map(str, cmd)), check=True)
 
 
-def load_metric_json(met_dir: Path, tag: str):
-    # eval_holdout writes rf_temporal_metrics_* when using --use-temporal (we use it for IID custom split)
-    p1 = met_dir / f"rf_temporal_metrics_{tag}.json"
-    p2 = met_dir / f"rf_temporal_metrics__{tag}.json"  # legacy
-    if p1.exists():
-        return json.loads(p1.read_text())
-    if p2.exists():
-        return json.loads(p2.read_text())
+def load_metric_json(tag: str):
+    # eval_holdout writes rf_temporal_metrics_* when using --use-temporal, even for IID via custom split
+    base = MET_IID
+    p1 = base / f"rf_temporal_metrics_{tag}.json"
+    p2 = base / f"rf_temporal_metrics__{tag}.json"  # legacy double-underscore
+    if p1.exists(): return json.loads(p1.read_text())
+    if p2.exists(): return json.loads(p2.read_text())
     return None
 
 
 def append_raw_row(raw_csv: Path, row: dict):
+    # append one row to raw.csv creating it if missing
     raw_csv.parent.mkdir(parents=True, exist_ok=True)
     if raw_csv.exists():
         df = pd.read_csv(raw_csv)
@@ -51,7 +49,6 @@ def append_raw_row(raw_csv: Path, row: dict):
 
 def main():
     ap = argparse.ArgumentParser()
-
     ap.add_argument("--fractions", type=str, default=",".join(map(str, FRACS_DEFAULT)))
     ap.add_argument("--seeds", type=str, default=",".join(map(str, SEEDS_DEFAULT)))
     ap.add_argument(
@@ -60,11 +57,6 @@ def main():
         default="real,gan,oversample,smote,evo,evogan",
         help="comma list subset to run, e.g., 'evo,evogan'"
     )
-
-    # dataset controls
-    ap.add_argument("--dataset", type=str, default="bodmas")
-    ap.add_argument("--npz", type=str, default=str(ROOT / "data" / "raw" / "bodmas.npz"))
-    ap.add_argument("--meta-csv", type=str, default=str(ROOT / "data" / "raw" / "bodmas_metadata.csv"))
 
     # train-time constraints
     ap.add_argument("--const-train-size", type=int, default=20000)
@@ -76,7 +68,7 @@ def main():
     ap.add_argument("--epochs", type=int, default=30)
     ap.add_argument("--n-critic", type=int, default=5)
     ap.add_argument("--batch-size", type=int, default=128)
-    ap.add_argument("--device", choices=["auto", "cpu", "cuda", "mps"], default="auto")
+    ap.add_argument("--device", choices=["auto","cpu","cuda","mps"], default="auto")
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--lambda-gp", type=float, default=10.0)
     ap.add_argument("--skip-gan-train", action="store_true", help="reuse existing generator if present")
@@ -85,78 +77,70 @@ def main():
     # eval parity with holdouts
     ap.add_argument("--rf-n-est", type=int, default=400)
     ap.add_argument("--rf-max-depth", type=int, default=20)
-    ap.add_argument("--rf-class-weight", choices=["none", "balanced"], default="none")
-    ap.add_argument("--val-threshold", choices=["balacc", "f1", "mcc", "none"], default="balacc")
-
+    ap.add_argument("--rf-class-weight", choices=["none","balanced"], default="none")
+    ap.add_argument("--val-threshold", choices=["balacc","f1","mcc","none"], default="balacc")
     args = ap.parse_args()
 
     fracs = [float(x) for x in args.fractions.split(",") if x.strip()]
     seeds = [int(x) for x in args.seeds.split(",") if x.strip()]
-    want = {m.strip().lower() for m in args.methods.split(",") if m.strip()}
 
-    # dataset-specific output locations (NO args usage at import time)
-    met_dir = ROOT / "data" / "processed" / "metrics" / f"iid_{args.dataset}"
-    gan_dir = ROOT / "models" / "gan" / f"iid_{args.dataset}"
-    met_dir.mkdir(parents=True, exist_ok=True)
-    gan_dir.mkdir(parents=True, exist_ok=True)
-
-    raw_csv = met_dir / "raw.csv"
+    MET_IID.mkdir(parents=True, exist_ok=True)
+    raw_csv = MET_IID / "raw.csv"
 
     for seed in seeds:
-        # 1) build IID split for this seed (dataset-specific file name)
-        split_json = ROOT / "data" / "holdouts" / f"{args.dataset}_iid_split_seed{seed}.json"
-        run([
-            sys.executable, "-m", "scripts.experiments.iid.make_iid_split",
-            "--seed", str(seed),
-            "--out", str(split_json),
-            "--npz", str(args.npz),
-        ])
+        # decide which methods are requested for this run
+        want = {m.strip().lower() for m in args.methods.split(",") if m.strip()}
+        use_gan_methods = any(m in want for m in ("gan", "evogan"))
 
-        # 2) build malware-only capped subset for GAN training
-        gan_seed_dir = gan_dir / f"seed{seed}"
-        gan_seed_dir.mkdir(parents=True, exist_ok=True)
-        subset_json = gan_seed_dir / "gan_subset_indices.json"
-        gen_path = gan_seed_dir / "generator.pth"
-        scaler_path = gan_seed_dir / "scaler.npz"
+        # 1) build IID split for this seed
+        split_json = ROOT / "data" / "holdouts" / f"iid_split_seed{seed}.json"
+        run([sys.executable, "-m", "scripts.experiments.iid.make_iid_split",
+            "--seed", str(seed), "--out", str(split_json)])
 
-        run([
-            sys.executable, "-m", "scripts.experiments.iid.make_iid_gan_subset",
-            "--split-json", str(split_json),
-            "--max-train-rows", str(args.max_gan_malware),
-            "--seed", str(seed),
-            "--out", str(subset_json),
-            "--npz", str(args.npz),
-        ])
+        # 2–4) GAN bits only if needed
+        if use_gan_methods:
+            gan_seed_dir = GAN_DIR / f"seed{seed}"
+            gan_seed_dir.mkdir(parents=True, exist_ok=True)
+            subset_json = gan_seed_dir / "gan_subset_indices.json"
+            gen_path    = gan_seed_dir / "generator.pth"
+            scaler_path = gan_seed_dir / "scaler.npz"
 
-        # 3) train GAN unless skipping and generator already exists
-        if gen_path.exists() and args.skip_gan_train:
-            print(f"[skip] generator exists: {gen_path}")
-        elif "gan" in want or "evogan" in want:
-            gan_cmd = [
-                sys.executable, "-m", "scripts.gan.train_gan",
-                "--indices-json", str(subset_json),
-                "--malware-only",
-                "--out", str(gen_path),
-                "--epochs", str(args.epochs),
-                "--n-critic", str(args.n_critic),
-                "--batch-size", str(args.batch_size),
-                "--device", args.device,
-                "--lr", str(args.lr),
-                "--lambda-gp", str(args.lambda_gp),
-            ]
-            if args.gan_extra:
-                gan_cmd.extend(shlex.split(args.gan_extra))
-            run(gan_cmd)
+            run([sys.executable, "-m", "scripts.experiments.iid.make_iid_gan_subset",
+                "--split-json", str(split_json),
+                "--max-train-rows", str(args.max_gan_malware),
+                "--seed", str(seed),
+                "--out", str(subset_json)])
 
-        # 4) fit GAN scaler on the same subset (only needed if gan/evogan will run)
-        if ("gan" in want or "evogan" in want) and (not scaler_path.exists()):
-            run([
-                sys.executable, "-m", "scripts.utils.make_gan_scaler",
-                "--indices-json", str(subset_json),
-                "--out", str(scaler_path),
-            ])
+            if gen_path.exists() and args.skip_gan_train:
+                print(f"[skip] generator exists: {gen_path}")
+            else:
+                gan_cmd = [
+                    sys.executable, "-m", "scripts.gan.train_gan",
+                    "--indices-json", str(subset_json),
+                    "--malware-only",
+                    "--out", str(gen_path),
+                    "--epochs", str(args.epochs),
+                    "--n-critic", str(args.n_critic),
+                    "--batch-size", str(args.batch_size),
+                    "--device", args.device,
+                    "--lr", str(args.lr),
+                    "--lambda-gp", str(args.lambda_gp),
+                ]
+                if args.gan_extra:
+                    gan_cmd.extend(shlex.split(args.gan_extra))
+                run(gan_cmd)
 
-        # 5) evaluate across FRACS × methods and append to raw.csv
+            if not scaler_path.exists():
+                run([sys.executable, "-m", "scripts.utils.make_gan_scaler",
+                    "--indices-json", str(subset_json),
+                    "--out", str(scaler_path)])
+        else:
+            # safe placeholders so we can still build the methods list uniformly
+            from pathlib import Path
+            gen_path = Path("/dev/null")
+            scaler_path = Path("/dev/null")
+
+        # 5) now build the methods list and continue exactly as you had
         common = [
             "--val-threshold", args.val_threshold,
             "--rf-class-weight", args.rf_class_weight,
@@ -164,25 +148,23 @@ def main():
             "--rf-n-est", str(args.rf_n_est),
             "--seed", str(seed),
             "--split-json", str(split_json),
-            "--metrics-subdir", f"iid_{args.dataset}",
-            "--npz", str(args.npz),
-            "--meta-csv", str(args.meta_csv),
+            "--metrics-subdir", "iid_final_demo",
         ]
 
         methods = [
-            ("real", []),
-            ("gan", [
+            ("real",       []),
+            ("gan",        [
                 "--use-gan",
                 "--gan-generator", str(gen_path),
-                "--gan-scaler", str(scaler_path),
+                "--gan-scaler",    str(scaler_path),
                 "--gan-like", "full",
                 "--gan-synth-per-real", "40",
                 "--gan-quality", "nn",
                 "--gan-qmult", "5",
             ]),
             ("oversample", ["--oversample"]),
-            ("smote", ["--smote"]),
-            ("evo", [
+            ("smote",      ["--smote"]),
+            ("evo",        [
                 "--use-evo",
                 "--evo-like", "full",
                 "--evo-synth-per-real", "40",
@@ -198,7 +180,7 @@ def main():
                 "--use-gan",
                 "--gan-evo-refine",
                 "--gan-generator", str(gen_path),
-                "--gan-scaler", str(scaler_path),
+                "--gan-scaler",    str(scaler_path),
                 "--gan-like", "full",
                 "--gan-synth-per-real", "40",
                 "--gan-quality", "nn",
@@ -211,17 +193,19 @@ def main():
                 "--evo-boundary-k", "5",
             ]),
         ]
+        want = {m.strip().lower() for m in args.methods.split(",") if m.strip()}
         methods = [(name, extra) for (name, extra) in methods if name in want]
+
+    # ... your existing loop over frac/variant stays the same
+
 
         for frac in fracs:
             for variant, extra in methods:
-                # dataset-aware tags to avoid collisions across datasets
-                tag = f"{args.dataset}_iid_f{frac}_s{seed}_{variant}"
-
+                tag = f"iid_f{frac}_s{seed}_{variant}"
                 cmd = [
                     sys.executable, "-m", "scripts.experiments.holdouts.eval_holdout",
-                    # we pass --use-temporal only to satisfy the mutually-exclusive group in eval_holdout;
-                    # the actual split is custom via --split-json (IID).
+                    # pass --use-temporal only to satisfy mutual-exclusion group in eval_holdout
+                    # actual split is provided via --split-json so this is IID via custom split
                     "--use-temporal",
                     "--scarce-real-frac", str(frac),
                     "--min-train-pos", str(args.min_train_pos),
@@ -238,18 +222,17 @@ def main():
                     print(f"[warn] eval failed for {tag} – continuing")
                     continue
 
-                m = load_metric_json(met_dir, tag)
+                m = load_metric_json(tag)
                 if not m:
                     print(f"[warn] missing metrics for {tag}")
                     continue
 
                 row = dict(
-                    dataset=args.dataset,
                     prefix="iid",
                     kind="iid",
                     frac=float(frac),
-                    const_train_size=int(args.const_train_size),
-                    variant=m.get("variant", variant),
+                    const_train_size=20000,
+                    variant=m.get("variant", "real"),
                     used_gan=bool(m.get("used_gan", False)),
                     tag=tag,
                     auc=m.get("auc"),
@@ -268,9 +251,9 @@ def main():
                     threshold=m.get("threshold"),
                     seed=int(seed),
                 )
-                append_raw_row(raw_csv, row)
+                append_raw_row(MET_IID / "raw.csv", row)
 
-    print(f"[ok] wrote/updated {raw_csv}")
+    print(f"[ok] wrote/updated {MET_IID / 'raw.csv'}")
 
 
 if __name__ == "__main__":

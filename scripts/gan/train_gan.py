@@ -47,12 +47,12 @@ def gradient_penalty(D, real, fake, lambda_gp: float):
     return lambda_gp * gp
 
 
-def load_xy():
-    # load full feature matrix and labels from NPZ configured in C
-    z = np.load(C.NPZ_PATH, allow_pickle=True)
+def load_xy(npz_path: str):
+    z = np.load(npz_path, allow_pickle=True)
     X = z["X"].astype(np.float32)
     y = z["y"].astype(np.int32) if "y" in z else None
     return X, y
+
 
 
 def pick_device(pref: str) -> torch.device:
@@ -88,6 +88,8 @@ def main():
     ap.add_argument("--device", type=str, default="auto",
                     help="auto|cpu|cuda|mps")
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--npz", type=str, default=str(getattr(C, "NPZ_PATH")))
+
     args = ap.parse_args()
 
     # reproducibility seeds
@@ -103,7 +105,7 @@ def main():
           f"n_critic={args.n_critic} lambda_gp={args.lambda_gp} device={device}")
 
     # data load
-    X_all, y_all = load_xy()
+    X_all, y_all = load_xy(args.npz)
 
     # optional restriction to provided TRAIN indices
     if args.indices_json:

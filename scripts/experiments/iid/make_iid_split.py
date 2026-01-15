@@ -19,10 +19,11 @@ def main():
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--test-frac", type=float, default=0.25)
     ap.add_argument("--out", type=str, default=None)
+    ap.add_argument("--npz", type=str, default=str(BODMAS_NPZ))
     args = ap.parse_args()
 
     # load labels and make an IID stratified split
-    z = np.load(str(BODMAS_NPZ), allow_pickle=True)
+    z = np.load(args.npz, allow_pickle=True)
     y = z["y"].astype(int)
     n = y.shape[0]
 
