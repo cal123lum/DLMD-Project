@@ -1,35 +1,28 @@
-# Python
+cat >> .gitignore <<'EOF'
+
+# env / caches
+venv/
+.venv/
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
-*.so
-*.egg-info/
-
-# Virtual environments
-venv/
-.env/
-
-# Data
-data/raw/*.npz
-data/processed/**
-data/holdouts/*.json
-
-# Models
-models/**
-logs/**
-!models/.gitkeep
-
-# Checkpoint / temp files
-*.joblib
-*.pth
-*.npy
-*.npz
-*.csv
-*.txt
-*.log
-
-# IDE
-.vscode/
-.idea/
 .DS_Store
+
+# data & artifacts (never commit)
+data/raw/
+data/processed/
+data/holdouts/
+out/
+runs/
+logs/
+
+# common large formats
+*.npz
+*.tar
+*.tar.gz
+*.bz2
+*.dat
+*.jsonl
+*.mdb
+*.db
+
+EOF
