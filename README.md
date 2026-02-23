@@ -1,225 +1,122 @@
-# DLMD Project – GAN/EVO Augmentation for Malware Detection
+# DLMD Project (Publishable)
 
-This repository contains the final code and artifacts for **“GAN‑based and EVO‑based Data Augmentation for Malware Classification under Data Scarcity.”**  
-It reproduces the i.i.d., temporal, and family (LOFO) experiments and generates all figures used in the paper.
+This repository contains the code used to run the DLMD experiments (IID, temporal, and LOFO regimes) and generate the paper figures across BODMAS, EMBER, and SOREL. Large datasets and run artifacts are intentionally not tracked in Git.
 
----
+## Contents
 
-## 1) Quick Start
+- `configs/standard_hparams.json`  
+  Shared hyperparameters used across all runs (RF settings, budgets, GAN/EVO/EvoGAN params, gates).
+
+- `scripts/experiments/`  
+  Experiment runners:
+  - `scripts/experiments/iid/run_iid_scarcity_sweep.py`
+  - `scripts/experiments/holdouts/run_temporal_sweep.py`
+  - `scripts/experiments/holdouts/run_family_sweep.py`
+
+- `scripts/plots/plot_results.py`  
+  Plotting CLI for curves, deltas, heatmaps, and variability summaries.
+
+- `data/`  
+  Expected local layout (not committed):
+  - `data/raw/` datasets
+  - `data/processed/metrics/` metrics outputs from runs
+  - `data/holdouts/` split indices (generated)
+
+## Environment
+
+Python 3.10+ recommended.
 
 ```bash
-# 1) Create & activate a virtual environment
-python3 -m venv venv
-source venv/bin/activate     # Windows: venv\Scripts\activate
-
-# 2) Install dependencies
-pip install --upgrade pip
+python -m venv .venv
+source .venv/bin/activate
+pip install -U pip
 pip install -r requirements.txt
-
-# 3) (Optional) Verify the three driver scripts are callable
-python run_iid_scarcity_sweep.py --help || true
-python run_temporal_sweep.py --help      || true
-python run_family_sweep.py --help        || true
 ```
 
-All experiments below assume you are in the repository root with the `venv` activated.
+On CHPC or any managed cluster, use your preferred module environment and create a venv in your workspace.
 
----
+## Local Data Placement
 
-## 2) Data Layout
+Place datasets under `data/raw/` (paths can be overridden via CLI flags).
 
-The runners expect processed metrics to land under these folders (created by the drivers). If you already have the results, your tree should look like this after running the sweeps:
+**EMBER**
+- `data/raw/ember_uncompressed.npz`
+- `data/raw/ember_metadata.csv`
 
-```
-data/
-└── processed/
-    └── metrics/
-        ├── iid_final/
-        │   └── raw.csv
-        ├── temporal_final_window/
-        │   ├── cut2019_10/raw.csv
-        │   ├── cut2019_12/raw.csv
-        │   ├── cut2020_03/raw.csv
-        │   ├── cut2020_06/raw.csv
-        │   └── cut2020_09/raw.csv   # may be absent if omitted
-        └── family_final/
-            ├── <familyA>/raw.csv
-            ├── <familyB>/raw.csv
-            └── ...
-```
+**SOREL subset**
+- `data/raw/sorel_subset_150k.npz`
+- `data/raw/sorel_subset_150k_metadata.csv`
 
-If you are starting from scratch, simply run the drivers in §3. They use the final defaults used for the paper (no extra CLI args required).
+**BODMAS**
+- `data/raw/bodmas.npz` (or the filename expected by your dataset loader)
 
----
+## Running experiments
 
-## 3) Reproducing the Experiments (Drivers)
+All runners accept `--hparams configs/standard_hparams.json` and apply a standardised configuration.
 
-> **Important:** The three driver scripts pick up the **final defaults** for splits, seeds, scarcity fractions, augmentation budgets, and evaluation. You can run them **without any arguments** to reproduce the paper’s results.
-
-### 3.1 i.i.d. Scarcity Calibration
-Creates `data/processed/metrics/iid_final/raw.csv`.
+### IID (example)
 
 ```bash
-python run_iid_scarcity_sweep.py
+python -m scripts.experiments.iid.run_iid_scarcity_sweep   --dataset bodmas   --npz data/raw/bodmas.npz   --fractions 0.0005,0.001,0.005,0.01   --seeds 42,1337,2025   --methods real,gan,evogan,evo,smote,oversample   --hparams configs/standard_hparams.json
 ```
 
-### 3.2 Temporal Holdout with Rolling Windows
-Creates one `raw.csv` per cutoff under `data/processed/metrics/temporal_final_window/*/raw.csv`.
+### Temporal sweep (example: EMBER)
 
 ```bash
-python run_temporal_sweep.py
+python -m scripts.experiments.holdouts.run_temporal_sweep   --dataset ember   --npz data/raw/ember_uncompressed.npz   --meta-csv data/raw/ember_metadata.csv   --cutoffs 2018-07-01,2018-08-01,2018-09-01,2018-10-01,2018-11-01   --seeds-override 42,1337,2025   --fractions 0.0005,0.001,0.005,0.01   --hparams configs/standard_hparams.json   --skip-existing
 ```
 
-### 3.3 Family Leave‑One‑Family‑Out (LOFO)
-Creates one `raw.csv` per family under `data/processed/metrics/family_final/*/raw.csv`.
+### Family / LOFO sweep (example: EMBER)
 
 ```bash
-python run_family_sweep.py
+python -m scripts.experiments.holdouts.run_family_sweep   --dataset ember   --npz data/raw/ember_uncompressed.npz   --meta-csv data/raw/ember_metadata.csv   --families xtrat,zbot,ramnit,sality,installmonster,zusy,emotet,vtflooder,UNKNOWN,fareit,adposhel,high   --seeds 42,1337,2025   --fractions 0.0005,0.001,0.005,0.01   --hparams configs/standard_hparams.json   --skip-existing
 ```
 
-Each driver will:
-- iterate the final scarcity grid `f ∈ {0.0005 … 0.01}` with floors on class counts,
-- run seeds `{42, 1337, 2025}`,
-- apply the shared augmentation budget and NN quality gate for GAN/EVO/EvoGAN,
-- evaluate the fixed RF classifier,
-- and write a consolidated `raw.csv` per regime/slice ready for plotting.
+### Notes
 
----
+- Temporal runs generate split indices under `data/holdouts/` and write metrics under `data/processed/metrics/temporal_<dataset>/`.
+- LOFO runs write metrics under `data/processed/metrics/family_<dataset>/` (for SOREL, “family” corresponds to tag-group LOFO).
 
-## 4) Make the Figures (Single CLI Plotter)
+## Plotting
 
-All plots are produced by a single pure‑matplotlib script:
+All plots are generated with `scripts/plots/plot_results.py`. The script accepts one or more CSVs (globs supported).
 
-```
-scripts/plots/plot_results.py
-```
+### Curves: AUC vs fraction (IID)
 
-> Tip: use `--out <dir>` to keep figures neatly grouped; paths below mirror the paper.
-
-### 4.1 i.i.d. Figures
-
-**AUC vs fraction (lines):**
 ```bash
-python scripts/plots/plot_results.py \
-  data/processed/metrics/iid_final/raw.csv \
-  --mode lines --metric auc --logx \
-  --out figures/iid
+python -m scripts.plots.plot_results data/processed/metrics/iid_ember/raw.csv   --mode lines --metric auc --logx   --out figures/iid/ember
 ```
 
-**ΔAUC bars @ f ∈ {0.0005, 0.005, 0.01} (paired bootstrap CIs + stars):**
+### Temporal aggregation over cutoffs/windows
+
 ```bash
-python scripts/plots/plot_results.py \
-  data/processed/metrics/iid_final/raw.csv \
-  --mode delta-bars --metric auc --fractions 0.0005,0.005,0.01 \
-  --out figures/iid
+python -m scripts.plots.plot_results "data/processed/metrics/temporal_ember/*/raw.csv"   --mode lines-agg --metric auc --logx   --out figures/temporal/ember
 ```
 
-### 4.2 Temporal Figures
+### LOFO aggregation over families/groups
 
-**Aggregate trend across cutoffs/windows (AUC vs fraction):**
 ```bash
-python scripts/plots/plot_results.py \
-  data/processed/metrics/temporal_final_window/*/raw.csv \
-  --mode lines-agg --metric auc --logx \
-  --out figures/temporal
+python -m scripts.plots.plot_results "data/processed/metrics/family_ember/*/raw.csv"   --mode lines-agg --metric auc --logx   --out figures/family/ember
 ```
 
-**Per‑method ΔAUC heatmaps @ f=0.0005:**
+### ΔAUC snapshots (paired vs Real-only)
+
 ```bash
-# GAN
-python scripts/plots/plot_results.py \
-  data/processed/metrics/temporal_final_window/*/raw.csv \
-  --mode heatmap --metric auc --method gan --fraction 0.0005 \
-  --out figures/temporal
-
-# EvoGAN
-python scripts/plots/plot_results.py \
-  data/processed/metrics/temporal_final_window/*/raw.csv \
-  --mode heatmap --metric auc --method evogan --fraction 0.0005 \
-  --out figures/temporal
-
-# EVO
-python scripts/plots/plot_results.py \
-  data/processed/metrics/temporal_final_window/*/raw.csv \
-  --mode heatmap --metric auc --method evo --fraction 0.0005 \
-  --out figures/temporal
+python -m scripts.plots.plot_results "data/processed/metrics/family_ember/*/raw.csv"   --mode delta-bars --metric auc --fractions 0.0005,0.005,0.01   --out figures/delta/family/ember
 ```
 
-### 4.3 Family (LOFO) Figures
+### Pooled ΔAUC across datasets (IID example)
 
-**AUC vs fraction, aggregated over families (lines):**
 ```bash
-python scripts/plots/plot_results.py \
-  data/processed/metrics/family_final/*/raw.csv \
-  --mode lines-agg --metric auc --logx \
-  --out figures/family
+python -m scripts.plots.plot_results   data/processed/metrics/iid_final/raw.csv   data/processed/metrics/iid_ember/raw.csv   data/processed/metrics/iid_sorel/raw.csv   --mode delta-bars --metric auc --fractions 0.0005,0.005,0.01   --out figures/delta_all/iid_all
 ```
 
-**Per‑family ΔAUC bars @ f=0.0005 (with CIs):**
-```bash
-python scripts/plots/plot_results.py \
-  data/processed/metrics/family_final/*/raw.csv \
-  --mode family-bars --metric auc --fraction 0.0005 \
-  --out figures/family
-```
+## Reproducibility notes
 
-**Seed variability (box) @ f=0.0005 (optional for appendix):**
-```bash
-python scripts/plots/plot_results.py \
-  data/processed/metrics/family_final/*/raw.csv \
-  --mode seed-box-agg --metric auc --fraction 0.0005 \
-  --out figures/family
-```
+- Datasets and large artifacts are intentionally excluded from Git history.
+- Use the shared hyperparameter file (`configs/standard_hparams.json`) to keep runs consistent across datasets and regimes.
+- Runners produce metrics CSVs under `data/processed/metrics/`, which are the inputs to all plotting commands.
 
-> You can also generate PR‑AUC / F1 / BalAcc / MCC by switching `--metric`.
+## Contact
 
----
-
-
-## 5) Troubleshooting
-
-- **FileNotFoundError for `raw.csv`**  
-  Run the corresponding driver first (see §3). The plotter reads consolidated CSVs only.
-
-- **Matplotlib font / backend warnings**  
-  These are harmless in headless environments; figures are still written to disk.
-
-- **Out-of-memory during drivers**  
-  Activate the virtualenv and ensure dependencies match `requirements.txt`. If you’re on a low‑RAM machine, close other apps. The defaults used in the paper run on a standard workstation.
-
-- **Different colors/order in legends**  
-  The plotter enforces a fixed method order and color map. If your CSV contains different variant labels, they must be one of: `real, gan, evogan, evo, smote, oversample`.
-
----
-
-## 6) Repro Notes (what’s fixed)
-
-- Fixed RF classifier and validation/threshold protocol across all regimes.
-- Shared augmentation budget & nearest‑neighbour gate across GAN/EVO/EvoGAN.
-- Identical test partitions across methods; differences reflect **training‑set composition** only.
-- Seeds `{42, 1337, 2025}`; fractions `{0.0005 … 0.01}`; 60‑day windows with 30‑day stride for temporal.
-
----
-
-## 7) Outputs
-
-Figures are written under `figures/` with informative names, e.g.:
-
-```
-figures/
-├── iid/
-│   ├── iid_auc_lines.png
-│   ├── delta_auc_f0.0005.png
-│   ├── delta_auc_f0.005.png
-│   └── delta_auc_f0.01.png
-├── temporal/
-│   ├── familyALL_auc_lines.png            # aggregate trend (lines-agg)
-│   ├── heatmap_gan_auc_f0.0005.png
-│   ├── heatmap_evogan_auc_f0.0005.png
-│   └── heatmap_evo_auc_f0.0005.png
-└── family/
-    ├── familyALL_auc_lines.png
-    ├── family_delta_auc_f0.0005.png
-    └── agg_auc_seed_box_f0.0005_.png
-```
-
+For questions about running on CHPC or reproducing specific paper figures, contact the project authors.
