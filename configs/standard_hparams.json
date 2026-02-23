@@ -1,0 +1,44 @@
+{
+  "shared": {
+    "const_train_size": 20000,
+    "min_train_pos": 50,
+    "min_train_neg": 50,
+    "val_threshold": "balacc",
+    "rf": { "n_estimators": 400, "max_depth": 20, "class_weight": "none", "n_jobs": 8 },
+
+    "alpha_synth_per_real": 40,
+    "qmult": 5,
+    "quality_gate": "nn",
+    "like_set": "full",
+    "seeds": [42, 1337, 2025]
+  },
+
+  "gan": {
+    "latent_dim": 128,
+    "lr": 0.0001,
+    "beta1": 0.0,
+    "beta2": 0.9,
+    "lambda_gp": 10.0,
+    "batch_size": 128,
+    "n_critic_iid_lofo": 5,
+    "n_critic_temporal": 4,
+    "epochs_iid_lofo": 30,
+    "epochs_temporal": 80
+  },
+
+  "evo": {
+    "cx_alpha": 2.0,
+    "mutate_sigma": 0.10,
+    "qlow": 0.01,
+    "qhigh": 0.99,
+    "boundary_low": 0.20,
+    "boundary_high": 0.60,
+    "boundary_k": 5
+  },
+
+  "evogan_lofo_ablation": {
+    "mutate_sigma": 0.15,
+    "boundary_low": 0.15,
+    "boundary_high": 0.70
+  }
+}

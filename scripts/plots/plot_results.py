@@ -341,52 +341,112 @@ def plot_lines(all_df: pd.DataFrame, metric: str, outdir: str, logx: bool, show_
         fig.tight_layout(); fig.savefig(fname, dpi=200); plt.close(fig)
         print(f"[ok] wrote {fname}")
 
-def plot_delta_bars(all_df: pd.DataFrame, metric: str, outdir: str, fractions: List[float], seed: int):
-    # delta bars vs real with bootstrap CIs and CI-based star marker
+def plot_delta_bars(
+    all_df: pd.DataFrame,
+    metric: str,
+    outdir: str,
+    fractions: List[float],
+    seed: int,
+    *,
+    alpha: float = 0.05,
+    p_adjust: str = "holm",
+):
+    # delta bars vs real with paired bootstrap CIs + adjusted p-value stars
     required = {"frac", "variant", "seed", metric}
     missing = required - set(all_df.columns)
     if missing:
         print(f"[warn] delta-bars: missing columns {missing}; skipping")
         return
-    pair_by = ["seed"]
-    if "family" in all_df.columns:
-        pair_by = ["family"]
-    elif "prefix" in all_df.columns:
-        pair_by = ["prefix", "seed"]
+
+    # Choose pairing units without collapsing replicates:
+    # - IID: pair on seed
+    # - Temporal: pair on (cutoff/prefix, window, seed)
+    # - Family: pair on (family, seed)
+    if "test_start" in all_df.columns:
+        pair_by = ["prefix", "test_start", "seed"]
+    elif "family" in all_df.columns:
+        pair_by = ["family", "seed"]
+    else:
+        pair_by = ["seed"]
+
+    # Prefer SciPy exact wilcoxon if available; fallback to local approx.
+    _scipy_wilcoxon = None
+    try:
+        from scipy.stats import wilcoxon as _scipy_wilcoxon  # type: ignore
+    except Exception:
+        _scipy_wilcoxon = None
+
+    def one_sided_p_greater(deltas: np.ndarray) -> float:
+        x = np.asarray([d for d in deltas if pd.notna(d) and d != 0], dtype=float)
+        if x.size == 0:
+            return 1.0
+        if _scipy_wilcoxon is not None:
+            # SciPy handles ties/zeros more robustly than our normal approx
+            try:
+                res = _scipy_wilcoxon(x, alternative="greater", zero_method="wilcox", correction=True, mode="auto")
+                return float(res.pvalue)
+            except Exception:
+                pass
+        return wilcoxon_p_greater(x)
+
     for f in fractions:
         mask = np.isclose(all_df["frac"].astype(float), float(f))
         deltas = paired_deltas_vs_real(all_df, metric, where=mask, pair_by=pair_by)
+
         methods = [m for m in LEGEND_ORDER if m != "real" and m in deltas and len(deltas[m]) > 0]
         if not methods:
             print(f"[warn] delta-bars: no methods with paired deltas at f={f}")
             continue
-        means, lows, highs, stars = [], [], [], []
+
+        means, lows, highs = [], [], []
+        raw_p: Dict[str, float] = {}
+
         for m in methods:
             v = np.asarray(deltas[m], dtype=float)
             mean, lo, hi = bootstrap_ci_mean(v, n_boot=2000, seed=seed, alpha=0.05)
-            means.append(mean); lows.append(lo); highs.append(hi)
-            stars.append("*" if (np.isfinite(lo) and lo > 0.0) else "ns")
+            means.append(mean)
+            lows.append(lo)
+            highs.append(hi)
+            raw_p[m] = one_sided_p_greater(v)
+
+        p_adjust = (p_adjust or "holm").lower().strip()
+        if p_adjust == "none":
+            adj_p = raw_p
+        elif p_adjust == "bh":
+            adj_p = bh_correction(raw_p)
+        else:
+            adj_p = holm_correction(raw_p, alpha=alpha)
+
+        stars = [p_to_stars(adj_p.get(m, 1.0)) for m in methods]
+
         x = np.arange(len(methods))
         fig, ax = plt.subplots(figsize=(7.6, 4.6))
-        bars = ax.bar(x, means, color=[COLOR.get(m, "#777777") for m in methods], alpha=0.95)
+        ax.bar(x, means, color=[COLOR.get(m, "#777777") for m in methods], alpha=0.95)
+
         ci_low = np.array(means) - np.array(lows)
         ci_high = np.array(highs) - np.array(means)
         ax.errorbar(x, means, yerr=[ci_low, ci_high], fmt="none", ecolor="black", elinewidth=1.2, capsize=4)
+
         ymax = max((m + (h if np.isfinite(h) else 0.0)) for m, h in zip(means, ci_high))
         ymin = min((m - (l if np.isfinite(l) else 0.0)) for m, l in zip(means, ci_low))
-        span = max(ymax - ymin, 1e-6); pad = 0.10 * span
-        ax.set_ylim(ymin - 0.06 * span, ymax + pad)
+        span = max(ymax - ymin, 1e-6)
+        ax.set_ylim(ymin - 0.06 * span, ymax + 0.12 * span)
+
         for i, star in enumerate(stars):
             y_text = means[i] + (ci_high[i] if np.isfinite(ci_high[i]) else 0.0) + 0.03 * span
             y_text = min(y_text, ax.get_ylim()[1] - 0.02 * span)
             ax.text(x[i], y_text, star, ha="center", va="bottom", fontsize=11)
+
         ax.set_xticks(x, methods)
         ax.set_ylabel(f"Δ{metric.upper()}")
-        ax.set_title(f"Δ{metric.upper()} vs Real @ f={f}")
+        ax.set_title(f"Δ{metric.upper()} vs Real @ f={f} (95% paired bootstrap CI; {p_adjust}-adjusted p)")
         ax.axhline(0, color="black", linewidth=1.0)
         ax.grid(True, axis="y", linestyle=":", alpha=0.7)
+
         fname = os.path.join(outdir, f"delta_{metric}_f{_sanitize_name(str(f))}.png")
-        fig.tight_layout(); fig.savefig(fname, dpi=200); plt.close(fig)
+        fig.tight_layout()
+        fig.savefig(fname, dpi=200)
+        plt.close(fig)
         print(f"[ok] wrote {fname}")
 
 # keep both corrections for compatibility with existing calls elsewhere in the repo
@@ -572,9 +632,26 @@ def plot_lines_agg(all_df: pd.DataFrame, metric: str, outdir: str,
     if missing:
         print(f"[warn] lines-agg: missing columns {missing}; skipping")
         return
+
     df = all_df.copy()
+
+    # infer regime for title + filename
     if "test_start" in df.columns:
+        regime = "temporal"
+        regime_title = "Temporal aggregation"
+        regime_fname = "temporalALL"
+        # temporal: average within each window/cutoff slice before aggregating
         df = df.groupby(["prefix", "frac", "variant", "seed"], as_index=False)[metric].mean()
+    elif "family" in df.columns:
+        regime = "family"
+        regime_title = "Family aggregation"
+        regime_fname = "familyALL"
+        # family rows are already per-family; keep as-is
+    else:
+        regime = "iid"
+        regime_title = "IID aggregation"
+        regime_fname = "iidALL"
+
     grp = df.groupby(["frac", "variant"], as_index=False).agg(
         mean=(metric, "mean"),
         sd=(metric, "std"),
@@ -586,7 +663,9 @@ def plot_lines_agg(all_df: pd.DataFrame, metric: str, outdir: str,
     if grp.empty:
         print("[warn] lines-agg: empty after min_groups filter; nothing to plot")
         return
+
     fig, ax = plt.subplots(figsize=(7.2, 4.6))
+
     if show_bands:
         for v in LEGEND_ORDER:
             g = grp[grp["variant"] == v].sort_values("frac")
@@ -598,22 +677,30 @@ def plot_lines_agg(all_df: pd.DataFrame, metric: str, outdir: str,
                 lower = g["mean"].astype(float) - g["sd"].fillna(0.0)
                 upper = g["mean"].astype(float) + g["sd"].fillna(0.0)
             ax.fill_between(g["frac"], lower, upper, alpha=0.14, color=COLOR.get(v, None), linewidth=0.0, zorder=1)
+
     for v in LEGEND_ORDER:
         g = grp[grp["variant"] == v].sort_values("frac")
         if g.empty:
             continue
-        ax.plot(g["frac"], g["mean"], label=v, color=COLOR.get(v, None), linewidth=2.2, marker="o", markersize=4, zorder=6)
+        ax.plot(g["frac"], g["mean"], label=v, color=COLOR.get(v, None),
+                linewidth=2.2, marker="o", markersize=4, zorder=6)
+
     if logx:
         ax.set_xscale("log")
     ax.xaxis.set_major_formatter(PercentFormatter(xmax=1.0, decimals=1))
     ax.set_xlabel("Real fraction of TRAIN")
     ax.set_ylabel(metric_label(metric))
     _tune_y_axis(ax, y_step=y_step, ylim=ylim)
-    ax.set_title(f"Family Aggregation | {metric_label(metric)} vs fraction")
+
+    ax.set_title(f"{regime_title} | {metric_label(metric)} vs fraction")
     ax.legend(ncols=2, frameon=False)
-    fname = os.path.join(outdir, f"familyALL_{metric}_lines.png")
-    fig.tight_layout(); fig.savefig(fname, dpi=200); plt.close(fig)
+
+    fname = os.path.join(outdir, f"{regime_fname}_{metric}_lines.png")
+    fig.tight_layout()
+    fig.savefig(fname, dpi=200)
+    plt.close(fig)
     print(f"[ok] wrote {fname}")
+
 
 def normalize_headers(df: pd.DataFrame) -> pd.DataFrame:
     # relax common header variations across CSV exports
@@ -827,7 +914,7 @@ def main(argv=None):
         if not args.fractions:
             print("[error] --fractions required for delta-bars"); return 2
         fracs = [float(x.strip()) for x in args.fractions.split(",") if x.strip()]
-        plot_delta_bars(df, metric, outdir, fracs, seed=args.seed)
+        plot_delta_bars(df, metric, outdir, fracs, seed=args.seed, alpha=args.alpha, p_adjust=args.p_adjust)
 
     elif mode == "windows":
         if args.prefix is None or args.fraction is None:

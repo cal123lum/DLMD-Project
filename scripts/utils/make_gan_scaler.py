@@ -20,10 +20,6 @@ def load_x(npz_path: str) -> np.ndarray:
 def read_train_indices(indices_json: Path) -> list[int]:
     d = json.loads(indices_json.read_text())
 
-    # Simple forms we write in experiments:
-    #  - {"train": [...]}  (no test)
-    #  - {"train_only": [...]}
-    #  - {"indices": [...]}
     if "train_only" in d:
         return list(map(int, d["train_only"]))
     if "train" in d and "test" not in d:
@@ -31,7 +27,6 @@ def read_train_indices(indices_json: Path) -> list[int]:
     if "indices" in d:
         return list(map(int, d["indices"]))
 
-    # Fallback: SplitIndices format (train/test keys etc.)
     split = SplitIndices.from_json(indices_json)
     return list(map(int, split.train))
 
@@ -49,14 +44,19 @@ def main():
     X = load_x(args.npz)
     train_idx = read_train_indices(idx_path)
 
-    X_sub = X[train_idx]
+    X_sub = X[np.asarray(train_idx, dtype=int)]
     scaler = StandardScaler().fit(X_sub)
+
+    mean = scaler.mean_.astype(np.float32)
+    scale = scaler.scale_.astype(np.float32)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez(
         out_path,
-        mean=scaler.mean_.astype(np.float32),
-        scale=scaler.scale_.astype(np.float32),
+        mean_=mean,
+        scale_=scale,
+        mean=mean,
+        scale=scale,
     )
 
     print(f"[ok] wrote {out_path} (rows={len(train_idx)}, d={X.shape[1]})")

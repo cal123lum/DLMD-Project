@@ -13,15 +13,31 @@ from src.paths import ROOT
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--split-json", required=True,
-                    help="path to family holdout split json (holdout_<family>.json)")
-    ap.add_argument("--max-train-rows", type=int, default=None,
-                    help="cap number of malware rows to speed GAN training, e.g., 20000")
+    ap.add_argument(
+        "--split-json",
+        required=True,
+        help="path to family holdout split json (holdout_<family>.json)",
+    )
+    ap.add_argument(
+        "--max-train-rows",
+        type=int,
+        default=None,
+        help="cap number of malware rows to speed GAN training, e.g., 20000",
+    )
     ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--stratify-by-family", action="store_true",
-                    help="sample malware across many families (within the training split)")
-    ap.add_argument("--out", required=True,
-                    help="where to write gan_subset_indices.json")
+    ap.add_argument(
+        "--stratify-by-family",
+        action="store_true",
+        help="sample malware across many families (within the training split)",
+    )
+    ap.add_argument(
+        "--stratify-col",
+        type=str,
+        default="family",
+        help="column in meta-csv to stratify over when --stratify-by-family is set "
+             "(e.g., 'family' for BODMAS/EMBER, 'group' for SOREL tag-LOFO)",
+    )
+    ap.add_argument("--out", required=True, help="where to write gan_subset_indices.json")
 
     # IMPORTANT: dataset paths
     ap.add_argument("--npz", type=str, default=str(ROOT / "data" / "raw" / "bodmas.npz"))
@@ -31,15 +47,9 @@ def main():
 
     split = SplitIndices.from_json(Path(args.split_json))
 
-    # load labels and metadata for the chosen dataset
+    # load labels
     z = np.load(args.npz, allow_pickle=True)
     y = z["y"].astype(int)
-
-    meta = pd.read_csv(args.meta_csv).fillna("")
-    if "family" not in meta.columns:
-        raise ValueError(f"meta-csv has no 'family' column: {args.meta_csv}")
-
-    fam_col = meta["family"].astype(str).str.strip().replace({"": "UNKNOWN"})
 
     train_idx = np.asarray(split.train, dtype=int)
     if train_idx.max(initial=-1) >= len(y):
@@ -55,17 +65,28 @@ def main():
         rng = np.random.default_rng(args.seed)
 
         if args.stratify_by_family:
-            fams = fam_col.iloc[mal_idx].values
-            df = pd.DataFrame({"idx": mal_idx, "family": fams})
-            grp = df.groupby("family", sort=False)
+            # Only load meta if we actually need stratification
+            meta = pd.read_csv(args.meta_csv).fillna("")
+            col = (args.stratify_col or "family").strip()
+            if col not in meta.columns:
+                raise ValueError(f"meta-csv has no '{col}' column: {args.meta_csv}")
+
+            label_col = meta[col].astype(str).str.strip().replace({"": "UNKNOWN"})
+
+            labels = label_col.iloc[mal_idx].values
+            df = pd.DataFrame({"idx": mal_idx, "label": labels})
+            grp = df.groupby("label", sort=False)
 
             # proportional allocation with floor 1 each
             sizes = grp.size()
-            alloc = np.maximum(1, np.floor(args.max_train_rows * (sizes / sizes.sum())).astype(int))
+            alloc = np.maximum(
+                1,
+                np.floor(args.max_train_rows * (sizes / sizes.sum())).astype(int),
+            )
 
             take = []
-            for fam, sub in grp:
-                k = int(alloc.loc[fam])
+            for label, sub in grp:
+                k = int(alloc.loc[label])
                 k = max(1, min(k, len(sub)))
                 take.append(sub.sample(n=k, random_state=int(rng.integers(0, 2**31 - 1))))
 
@@ -74,14 +95,22 @@ def main():
             # adjust for rounding to hit cap
             if len(df_take) < args.max_train_rows:
                 need = args.max_train_rows - len(df_take)
-                rest = df.drop(df_take.index, errors="ignore")
+
+                # easiest way to get remainder is boolean mask by idx
+                chosen = set(df_take["idx"].tolist())
+                rest = df[~df["idx"].isin(chosen)]
+
                 if len(rest) > 0:
-                    add = rest.sample(n=min(need, len(rest)),
-                                      random_state=int(rng.integers(0, 2**31 - 1)))
+                    add = rest.sample(
+                        n=min(need, len(rest)),
+                        random_state=int(rng.integers(0, 2**31 - 1)),
+                    )
                     df_take = pd.concat([df_take, add], ignore_index=True)
             elif len(df_take) > args.max_train_rows:
-                df_take = df_take.sample(n=args.max_train_rows,
-                                         random_state=int(rng.integers(0, 2**31 - 1)))
+                df_take = df_take.sample(
+                    n=args.max_train_rows,
+                    random_state=int(rng.integers(0, 2**31 - 1)),
+                )
 
             mal_idx = df_take["idx"].to_numpy(dtype=int)
         else:

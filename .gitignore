@@ -1,28 +1,56 @@
-cat >> .gitignore <<'EOF'
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
 
-# env / caches
+# ---- venv / conda ----
 venv/
 .venv/
-__pycache__/
-*.pyc
-.DS_Store
+ENV/
+env/
+conda/
+*.conda*
 
-# data & artifacts (never commit)
+# ---- data / artifacts (HUGE) ----
 data/raw/
 data/processed/
 data/holdouts/
-out/
-runs/
-logs/
+data/datasets/
+datasets/
 
-# common large formats
-*.npz
+# allow small "example" data if you add it later
+!data/README.md
+!data/**/.gitkeep
+!data/**/example*
+!data/**/sample*
+
+# ---- models / checkpoints ----
+models/
+*.pth
+*.pt
+*.joblib
+
+# ---- logs / tmp ----
+logs/
+tmp/
+*.log
+
+# ---- OS / editor ----
+.DS_Store
+.vscode/
+.idea/
+
+# ---- archives ----
+*.zip
 *.tar
 *.tar.gz
+*.tgz
 *.bz2
-*.dat
-*.jsonl
-*.mdb
-*.db
-
-EOF
+*.7z
